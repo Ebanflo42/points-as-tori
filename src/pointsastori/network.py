@@ -17,6 +17,7 @@ import optax
 
 from typing import Tuple, List
 
+from .linear_least_squares import least_squares_coefficients
 from .shape_3d import *
 
 jax.config.update('jax_disable_jit', False)
@@ -1119,7 +1120,7 @@ class FundamentalFormPredictor(nnx.Module):
 
 		return predicted_coefficients
 
-	def precompute_coefficients_in_chunks(self, points, normals, k_neighbors, chunk_size=50000, outliers=np.array([])):
+	def precompute_coefficients_in_chunks(self, points, normals, k_neighbors, chunk_size=50000, outliers=np.array([]), use_linear_least_squares: bool = False):
 		"""
 		Process in chunks to avoid GPU memory issues
 		"""
@@ -1141,6 +1142,9 @@ class FundamentalFormPredictor(nnx.Module):
 		n_chunks = (n_points + chunk_size - 1) // chunk_size
 		t0 = time.time()
 
+		if use_linear_least_squares:
+			jit_least_squares = jax.jit(least_squares_coefficients)
+
 		for chunk_idx in range(n_chunks):
 			start_idx = chunk_idx * chunk_size
 			end_idx = min(start_idx + chunk_size, n_points)
@@ -1148,10 +1152,14 @@ class FundamentalFormPredictor(nnx.Module):
 			# Extract chunk
 			chunk_indices = indices[start_idx:end_idx]  # (chunk_size, k)
 			chunk_points = points[chunk_indices]  # (chunk_size, k, 3)
-			chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
 
-			# Forward pass for this chunk
-			chunk_coeffs = self(chunk_points, chunk_normals)
+			if use_linear_least_squares:
+				chunk_coeffs = jit_least_squares(chunk_points)
+
+			else:
+				chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
+				# Forward pass for this chunk
+				chunk_coeffs = self(chunk_points, chunk_normals)
 
 			# Wait for GPU to finish and transfer to CPU
 			chunk_coeffs_cpu = np.array(chunk_coeffs.block_until_ready())

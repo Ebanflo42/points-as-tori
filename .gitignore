@@ -1,3 +1,7 @@
+datasets/
+models/
+tori/
+
 media/*.pdf
 training/datasets/
 training/models/
