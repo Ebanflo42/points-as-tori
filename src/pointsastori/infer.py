@@ -30,6 +30,7 @@ class PointsAsTori:
 		tori: dict = None,
 		tori_filepath: str = None,
 		model_path: str = None,
+		chunk_size: int = 20000,
 		use_linear_least_squares: bool = False
 	) -> None:
 		"""
@@ -56,7 +57,7 @@ class PointsAsTori:
 
 			model, k_nb = PointsAsTori._load_model(model_path)
 
-			coeffs = model.precompute_coefficients_in_chunks(points, normals, k_nb, chunk_size=5000, use_linear_least_squares=use_linear_least_squares)
+			coeffs = model.precompute_coefficients_in_chunks(points, normals, k_nb, chunk_size=chunk_size, use_linear_least_squares=use_linear_least_squares)
 			centers, axes, major_radii, minor_radii = fit_tori_from_forms(points, normals, np.array(coeffs))
 
 			self._tdf.set_tori(centers, axes, major_radii, minor_radii)

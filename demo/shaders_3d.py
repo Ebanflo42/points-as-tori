@@ -1,9 +1,8 @@
-# Text in these shaders can get replaced during execution based on values that change occasionally (and warrant the overhead of re-compiling the shader)
+# Text in these shaders can get replaced during execution based on values that change occasionally
+# (and warrant the overhead of re-compiling the shader)
 
-# Set up a pixel shader where a single quad takes up the whole screen.
-# We shouldn't have to change this code.
 VERTEX_SHADER = """
-    #version 150 core
+    #version 330 core
     
     in vec2 position;
     out vec2 fragCoord;
@@ -23,11 +22,16 @@ COMMON_SHADER = """
 const float PI = 3.14159265358979323846;
 const float INFINITY = 100000000.0;
 
-uniform sampler2D shape, isocontour; // texture that stores the ground-truth shape, if availablee
-uniform sampler2D pointcloud; // texture that stores point cloud positions and normals
+// 40-NN is required by the algorithm. This is the *only* place the size is defined.
+const int max_neighborhood_size = 40;
+
+// BVH traversal stack. 32 is enough for balanced trees up to ~4 billion primitives.
+const int BVH_STACK_SIZE = 32;
+
+uniform sampler2D shape, isocontour;
+uniform sampler2D pointcloud;
 uniform sampler2D pointcolors;
 uniform int neighborhood_size;
-const int max_neighborhood_size = 128;
 uniform float neighborhood_radius;
 uniform int n_faces;
 uniform int n_points;
@@ -54,8 +58,6 @@ ivec2 index_to_texel(int idx) {
     return ivec2(x, y);
 }
 
-// Sample a texture.. 
-// It is assumed that the i-th texel stores an attribute associated with the i-th entry of an array.
 vec4 fetch_texel(int idx, sampler2D texture) {
     ivec2 texel_pos = index_to_texel(idx);
     return texelFetch(texture, texel_pos, 0);
@@ -71,22 +73,17 @@ vec3 fetch_normal(int pIdx) {
 
 // ==== BVH
 
-// point cloud
 uniform sampler2D pc_bvh_nodes;
 uniform sampler2D pc_bvh_prim_indices;
 uniform int n_pc_bvh_nodes;
 
-// mesh
 uniform sampler2D mesh_bvh_nodes;
 uniform sampler2D mesh_bvh_prim_indices;
 uniform int n_mesh_bvh_nodes;
 
-// isocontour
 uniform sampler2D isomesh_bvh_nodes;
 uniform sampler2D isomesh_bvh_prim_indices;
 uniform int n_isomesh_bvh_nodes;
-
-// Some of the BVH logic below was implemented with the help of Claude
 
 void fetchBVHNode(sampler2D bvh_nodes, int nodeIdx, out vec3 aabb_min, out vec3 aabb_max,
                   out int left_idx, out int right_idx,
@@ -103,15 +100,6 @@ void fetchBVHNode(sampler2D bvh_nodes, int nodeIdx, out vec3 aabb_min, out vec3 
     right_idx = int(data1.w);
     prim_start = int(data2.x);
     prim_count = int(data2.y);
-}
-
-void fetchBVHNodeAABB(sampler2D bvh_nodes, int nodeIdx, 
-                      out vec3 aabb_min, out vec3 aabb_max) {
-    int base_idx = nodeIdx * 3;
-    vec4 data0 = fetch_texel(base_idx, bvh_nodes);
-    vec4 data1 = fetch_texel(base_idx + 1, bvh_nodes);
-    aabb_min = data0.xyz;
-    aabb_max = vec3(data0.w, data1.xy);
 }
 
 bool intersectAABB(vec3 ray_origin, vec3 ray_dir, vec3 aabb_min, vec3 aabb_max,
@@ -135,209 +123,68 @@ float pointAABBDistanceSq(vec3 point, vec3 aabb_min, vec3 aabb_max) {
     return dot(diff, diff);
 }
 
-int bvhClosestPoint(vec3 query, out float min_dist) {
-    min_dist = INFINITY;
-    int closest_idx = -1;
-    
-    int stack[64];
-    int stack_ptr = 0;
-    stack[stack_ptr++] = 0;
-    
-    while (stack_ptr > 0) {
-        int node_idx = stack[--stack_ptr];
-        
-        vec3 aabb_min, aabb_max;
-        int left_idx, right_idx, prim_start, prim_count;
-        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max, left_idx, right_idx, prim_start, prim_count);
-        
-        float node_dist_sq = pointAABBDistanceSq(query, aabb_min, aabb_max);
-        if (node_dist_sq > min_dist * min_dist) {
-            continue;
-        }
-        
-        if (prim_count > 0) {
-            for (int i = 0; i < prim_count; i++) {
-                int prim_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
-                vec3 point = fetch_point(prim_idx);
-                float dist = length(query - point);
-                if (dist < min_dist) {
-                    min_dist = dist;
-                    closest_idx = prim_idx;
-                }
-            }
-        } else {
-            vec3 left_aabb_min, left_aabb_max;
-            int left_left, left_right, left_prim_start, left_prim_count;
-            fetchBVHNode(pc_bvh_nodes, left_idx, left_aabb_min, left_aabb_max,
-                        left_left, left_right, left_prim_start, left_prim_count);
-            
-            vec3 right_aabb_min, right_aabb_max;
-            int right_left, right_right, right_prim_start, right_prim_count;
-            fetchBVHNode(pc_bvh_nodes, right_idx, right_aabb_min, right_aabb_max,
-                        right_left, right_right, right_prim_start, right_prim_count);
-            
-            float left_dist_sq = pointAABBDistanceSq(query, left_aabb_min, left_aabb_max);
-            float right_dist_sq = pointAABBDistanceSq(query, right_aabb_min, right_aabb_max);
-            
-            if (left_dist_sq < right_dist_sq) {
-                if (right_dist_sq <= min_dist * min_dist) stack[stack_ptr++] = right_idx;
-                if (left_dist_sq <= min_dist * min_dist) stack[stack_ptr++] = left_idx;
-            } else {
-                if (left_dist_sq <= min_dist * min_dist) stack[stack_ptr++] = left_idx;
-                if (right_dist_sq <= min_dist * min_dist) stack[stack_ptr++] = right_idx;
-            }
-        }
+// ----------------------------------------------------------------------------
+// KNN result struct — replaces the `out int arr[N]` / `out float arr[N]`
+// parameters that triggered C5041.
+//
+// Arrays inside a struct are passed by value through inout and allocated once
+// per call site, instead of once per function signature. This is dramatically
+// friendlier to Apple/Metal-backed GL and older AMD drivers.
+// ----------------------------------------------------------------------------
+struct KNNResult {
+    int   indices[max_neighborhood_size];
+    float dists[max_neighborhood_size];
+    int   count;
+};
+
+void knn_init(inout KNNResult r) {
+    r.count = 0;
+    for (int i = 0; i < max_neighborhood_size; i++) {
+        r.indices[i] = -1;
+        r.dists[i]   = INFINITY;
     }
-    
-    return closest_idx;
 }
 
-int bvhPointsInRadius(vec3 query, float radius, int max_results,
-                      out int result_indices[max_neighborhood_size], out float result_dists[max_neighborhood_size]) {
-    int count = 0;
-    float radius_sq = radius * radius;
-    
-    int stack[64];
-    int stack_ptr = 0;
-    stack[stack_ptr++] = 0;
-    
-    while (stack_ptr > 0 && count < max_results) {
-        int node_idx = stack[--stack_ptr];
-        
-        vec3 aabb_min, aabb_max;
-        int left_idx, right_idx, prim_start, prim_count;
-        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max, left_idx, right_idx, prim_start, prim_count);
-        
-        float node_dist_sq = pointAABBDistanceSq(query, aabb_min, aabb_max);
-        if (node_dist_sq > radius_sq) {
-            continue;
+// Insert (idx, dist) into the sorted-by-distance result, keeping at most k.
+// Returns true if inserted.
+bool knn_insert(inout KNNResult r, int idx, float dist, int k) {
+    if (r.count < k) {
+        // Find sorted insertion position
+        int pos = r.count;
+        for (int j = 0; j < r.count; j++) {
+            if (dist < r.dists[j]) { pos = j; break; }
         }
-        
-        if (prim_count > 0) {
-            for (int i = 0; i < prim_count && count < max_results; i++) {
-                int prim_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
-                vec3 point = fetch_point(prim_idx);
-                float dist_sq = dot(query - point, query - point);
-                if (dist_sq <= radius_sq) {
-                    result_indices[count] = prim_idx;
-                    result_dists[count] = sqrt(dist_sq);
-                    count++;
-                }
-            }
-        } else {
-            stack[stack_ptr++] = left_idx;
-            stack[stack_ptr++] = right_idx;
+        for (int j = r.count; j > pos; j--) {
+            r.dists[j]   = r.dists[j-1];
+            r.indices[j] = r.indices[j-1];
         }
+        r.dists[pos]   = dist;
+        r.indices[pos] = idx;
+        r.count++;
+        return true;
+    } else if (dist < r.dists[k-1]) {
+        // Replace the farthest element (at index k-1) and re-sort
+        r.dists[k-1]   = dist;
+        r.indices[k-1] = idx;
+        // Bubble it left into place
+        for (int j = k-1; j > 0; j--) {
+            if (r.dists[j] < r.dists[j-1]) {
+                float td = r.dists[j];   r.dists[j]   = r.dists[j-1];   r.dists[j-1]   = td;
+                int   ti = r.indices[j]; r.indices[j] = r.indices[j-1]; r.indices[j-1] = ti;
+            } else break;
+        }
+        return true;
     }
-    
-    return count;
+    return false;
 }
 
-// Returns actual number of neighbors found (may be less than k)
-int bvhKNearestNeighbors(vec3 query, int k, int max_results,
-                         out int result_indices[max_neighborhood_size], out float result_dists[max_neighborhood_size]) {
-    if (n_pc_bvh_nodes == 0 || k <= 0) return 0;
-    
-    // Use max_results as the array size limit
-    k = min(k, max_results);
-    
-    // Priority queue using simple insertion sort
-    // We maintain the k closest points found so far
-    int count = 0;
-    float kth_dist_sq = 1e10;  // Distance to k-th nearest (infinity initially)
-    
-    int stack[64];
-    int stack_ptr = 0;
-    stack[stack_ptr++] = 0;  // Start at root
-    
-    while (stack_ptr > 0) {
-        int node_idx = stack[--stack_ptr];
-        
-        vec3 aabb_min, aabb_max;
-        int left_idx, right_idx, prim_start, prim_count;
-        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max, left_idx, right_idx, 
-                     prim_start, prim_count);
-        
-        // Prune: if closest point in AABB is farther than k-th nearest, skip
-        float node_dist_sq = pointAABBDistanceSq(query, aabb_min, aabb_max);
-        if (count >= k && node_dist_sq > kth_dist_sq) {
-            continue;
-        }
-        
-        // Leaf node: process points
-        if (prim_count > 0) {
-            for (int i = 0; i < prim_count; i++) {
-                int prim_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
-                vec3 point = fetch_point(prim_idx);
-                float dist_sq = dot(query - point, query - point);
-                
-                // Check if this point should be in the k-NN set
-                if (count < k) {
-                    // Haven't found k points yet, just add it
-                    result_indices[count] = prim_idx;
-                    result_dists[count] = sqrt(dist_sq);
-                    count++;
-                    
-                    // Update kth_dist_sq (find maximum distance in current set)
-                    kth_dist_sq = 0.0;
-                    for (int j = 0; j < count; j++) {
-                        kth_dist_sq = max(kth_dist_sq, result_dists[j] * result_dists[j]);
-                    }
-                } else if (dist_sq < kth_dist_sq) {
-                    // Replace farthest point in k-NN set
-                    // Find index of farthest point
-                    int max_idx = 0;
-                    float max_dist_sq = result_dists[0] * result_dists[0];
-                    for (int j = 1; j < k; j++) {
-                        float d_sq = result_dists[j] * result_dists[j];
-                        if (d_sq > max_dist_sq) {
-                            max_dist_sq = d_sq;
-                            max_idx = j;
-                        }
-                    }
-                    
-                    // Replace
-                    result_indices[max_idx] = prim_idx;
-                    result_dists[max_idx] = sqrt(dist_sq);
-                    
-                    // Update kth_dist_sq
-                    kth_dist_sq = 0.0;
-                    for (int j = 0; j < k; j++) {
-                        kth_dist_sq = max(kth_dist_sq, result_dists[j] * result_dists[j]);
-                    }
-                }
-            }
-        } else {
-            // Internal node: push children
-            // Prioritize closer child for better pruning
-            vec3 left_aabb_min, left_aabb_max;
-            int left_left, left_right, left_prim_start, left_prim_count;
-            fetchBVHNode(pc_bvh_nodes, left_idx, left_aabb_min, left_aabb_max,
-                        left_left, left_right, left_prim_start, left_prim_count);
-            
-            vec3 right_aabb_min, right_aabb_max;
-            int right_left, right_right, right_prim_start, right_prim_count;
-            fetchBVHNode(pc_bvh_nodes, right_idx, right_aabb_min, right_aabb_max,
-                        right_left, right_right, right_prim_start, right_prim_count);
-            
-            float left_dist_sq = pointAABBDistanceSq(query, left_aabb_min, left_aabb_max);
-            float right_dist_sq = pointAABBDistanceSq(query, right_aabb_min, right_aabb_max);
-            
-            // Push farther child first (so closer is processed first)
-            if (left_dist_sq < right_dist_sq) {
-                if (count < k || right_dist_sq <= kth_dist_sq) stack[stack_ptr++] = right_idx;
-                if (count < k || left_dist_sq <= kth_dist_sq) stack[stack_ptr++] = left_idx;
-            } else {
-                if (count < k || left_dist_sq <= kth_dist_sq) stack[stack_ptr++] = left_idx;
-                if (count < k || right_dist_sq <= kth_dist_sq) stack[stack_ptr++] = right_idx;
-            }
-        }
-    }
-    
-    return min(count, k);
-}
+// ----------------------------------------------------------------------------
+// Geometry helpers (unchanged)
+// ----------------------------------------------------------------------------
 
-float dot2( in vec3 v ) { return dot(v,v); }
+// ---- Low-level geometry helpers (declared first so BVH traversals can call them)
+
+float dot2(in vec3 v) { return dot(v,v); }
 
 vec3 closestPointOnTriangle(vec3 p, vec3 v1, vec3 v2, vec3 v3, out vec3 normal) {
     vec3 v21 = v2 - v1; vec3 p1 = p - v1;
@@ -346,30 +193,23 @@ vec3 closestPointOnTriangle(vec3 p, vec3 v1, vec3 v2, vec3 v3, out vec3 normal) 
     vec3 nor = cross(v21, v13);
     normal = -nor;
     
-    // inside/outside test
     bool isInside = (sign(dot(cross(v21, nor), p1)) + 
                      sign(dot(cross(v32, nor), p2)) + 
                      sign(dot(cross(v13, nor), p3)) >= 2.0);
     
     if (isInside) {
-        // Point projects inside triangle - closest point is on face
         float t = dot(nor, p1) / dot2(nor);
         return p - t * nor;
     } else {
-        // Point projects outside - find closest point on edges
         float t1 = clamp(dot(v21, p1) / dot2(v21), 0.0, 1.0);
         float t2 = clamp(dot(v32, p2) / dot2(v32), 0.0, 1.0);
         float t3 = clamp(dot(v13, p3) / dot2(v13), 0.0, 1.0);
-        
         vec3 closest1 = p1 - v21 * t1;
         vec3 closest2 = p2 - v32 * t2;
         vec3 closest3 = p3 - v13 * t3;
-        
         float d1 = dot2(closest1);
         float d2 = dot2(closest2);
         float d3 = dot2(closest3);
-        
-        // Return closest of the three edge points
         if (d1 < d2 && d1 < d3) return v1 + v21 * t1;
         if (d2 < d3) return v2 + v32 * t2;
         return v3 + v13 * t3;
@@ -383,22 +223,46 @@ float pointTriangleDistanceSq(vec3 point, vec3 v0, vec3 v1, vec3 v2) {
     return dot(diff, diff);
 }
 
-int bvhKNearestTriangles(sampler2D mesh, sampler2D bvh_nodes, sampler2D bvh_indices, 
-                        int n_bvh_nodes, vec3 query, int k, int max_results,
-                        out int result_indices[max_neighborhood_size], out float result_dists[max_neighborhood_size]) {
-    if (n_bvh_nodes == 0) {
-        return 0;
-    }
+bool intersectSphere(in vec3 ro, in vec3 rd, in vec3 p, in float r, out float t, out vec3 n) {
+    t = dot(rd, p - ro) / dot(rd, rd);
+    float d = length(ro + t * rd - p);
+    if (d > r) return false;
+    float s = sqrt(r * r - d * d);
+    if (t - s >= 0.) { t -= s; } else { t += s; }
+    n = normalize(ro + t * rd - p);
+    return t > 0.;
+}
+
+bool intersectTriangle(in vec3 ro, in vec3 rd, in vec3 v0, in vec3 v1, in vec3 v2,
+                       out float t, out vec2 bary) {
+    const float EPSILON = 1e-8;
+    vec3 edge1 = v1 - v0;
+    vec3 edge2 = v2 - v0;
+    vec3 h = cross(rd, edge2);
+    float a = dot(edge1, h);
+    if (abs(a) < EPSILON) return false;
+    float f = 1.0 / a;
+    vec3 s = ro - v0;
+    float u = f * dot(s, h);
+    if (u < 0.0 || u > 1.0) return false;
+    vec3 q = cross(s, edge1);
+    float v = f * dot(rd, q);
+    if (v < 0.0 || u + v > 1.0) return false;
+    t = f * dot(edge2, q);
+    if (t < EPSILON) return false;
+    bary = vec2(u, v);
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// bvhKNearestNeighbors — struct version
+// ----------------------------------------------------------------------------
+void bvhKNearestNeighbors(vec3 query, int k, inout KNNResult r) {
+    knn_init(r);
+    if (n_pc_bvh_nodes == 0 || k <= 0) return;
+    k = min(k, max_neighborhood_size);
     
-    int count = 0;
-    
-    // Initialize result arrays with large distances
-    for (int i = 0; i < max_results; i++) {
-        result_dists[i] = INFINITY;
-        result_indices[i] = -1;
-    }
-    
-    int stack[64];
+    int stack[BVH_STACK_SIZE];
     int stack_ptr = 0;
     stack[stack_ptr++] = 0;
     
@@ -407,223 +271,255 @@ int bvhKNearestTriangles(sampler2D mesh, sampler2D bvh_nodes, sampler2D bvh_indi
         
         vec3 aabb_min, aabb_max;
         int left_idx, right_idx, prim_start, prim_count;
-        fetchBVHNode(bvh_nodes, node_idx, aabb_min, aabb_max, left_idx, right_idx, prim_start, prim_count);
+        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max, left_idx, right_idx,
+                     prim_start, prim_count);
         
-        // Check if this node could contain closer triangles than our current k-th nearest
         float node_dist_sq = pointAABBDistanceSq(query, aabb_min, aabb_max);
-        float kth_dist_sq = (count >= k) ? result_dists[k-1] * result_dists[k-1] : INFINITY;
-        
-        if (node_dist_sq > kth_dist_sq) {
-            continue;
-        }
+        float kth_dist_sq = (r.count >= k) ? r.dists[k-1] * r.dists[k-1] : INFINITY;
+        if (node_dist_sq > kth_dist_sq) continue;
         
         if (prim_count > 0) {
-            // Leaf node: check all triangles
-            for (int i = 0; i < prim_count && count < max_results; i++) {
+            for (int i = 0; i < prim_count; i++) {
+                int prim_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
+                vec3 point = fetch_point(prim_idx);
+                float dist_sq = dot(query - point, query - point);
+                knn_insert(r, prim_idx, sqrt(dist_sq), k);
+            }
+        } else {
+            vec3 left_aabb_min, left_aabb_max;
+            int ll, lr, lps, lpc;
+            fetchBVHNode(pc_bvh_nodes, left_idx, left_aabb_min, left_aabb_max,
+                         ll, lr, lps, lpc);
+            
+            vec3 right_aabb_min, right_aabb_max;
+            int rl, rr, rps, rpc;
+            fetchBVHNode(pc_bvh_nodes, right_idx, right_aabb_min, right_aabb_max,
+                         rl, rr, rps, rpc);
+            
+            float left_dist_sq  = pointAABBDistanceSq(query, left_aabb_min,  left_aabb_max);
+            float right_dist_sq = pointAABBDistanceSq(query, right_aabb_min, right_aabb_max);
+            
+            float kth_dist_sq2 = (r.count >= k) ? r.dists[k-1] * r.dists[k-1] : INFINITY;
+            if (left_dist_sq < right_dist_sq) {
+                if (r.count < k || right_dist_sq <= kth_dist_sq2) stack[stack_ptr++] = right_idx;
+                if (r.count < k || left_dist_sq  <= kth_dist_sq2) stack[stack_ptr++] = left_idx;
+            } else {
+                if (r.count < k || left_dist_sq  <= kth_dist_sq2) stack[stack_ptr++] = left_idx;
+                if (r.count < k || right_dist_sq <= kth_dist_sq2) stack[stack_ptr++] = right_idx;
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// bvhKNearestTriangles — struct version, plus the count>=k guard
+// ----------------------------------------------------------------------------
+void bvhKNearestTriangles(sampler2D mesh, sampler2D bvh_nodes, sampler2D bvh_indices,
+                          int n_bvh_nodes, vec3 query, int k, inout KNNResult r) {
+    knn_init(r);
+    if (n_bvh_nodes == 0 || k <= 0) return;
+    k = min(k, max_neighborhood_size);
+    
+    int stack[BVH_STACK_SIZE];
+    int stack_ptr = 0;
+    stack[stack_ptr++] = 0;
+    
+    while (stack_ptr > 0) {
+        int node_idx = stack[--stack_ptr];
+        
+        vec3 aabb_min, aabb_max;
+        int left_idx, right_idx, prim_start, prim_count;
+        fetchBVHNode(bvh_nodes, node_idx, aabb_min, aabb_max,
+                     left_idx, right_idx, prim_start, prim_count);
+        
+        float node_dist_sq = pointAABBDistanceSq(query, aabb_min, aabb_max);
+        // GUARD: only prune if we already have k results.
+        float kth_dist_sq = (r.count >= k) ? r.dists[k-1] * r.dists[k-1] : INFINITY;
+        if (node_dist_sq > kth_dist_sq) continue;
+        
+        if (prim_count > 0) {
+            for (int i = 0; i < prim_count; i++) {
                 int tri_idx = int(fetch_texel(prim_start + i, bvh_indices).x);
-                
-                // Fetch triangle vertices
-                vec3 v0 = fetch_texel(3 * tri_idx, mesh).xyz;
+                vec3 v0 = fetch_texel(3 * tri_idx,     mesh).xyz;
                 vec3 v1 = fetch_texel(3 * tri_idx + 1, mesh).xyz;
                 vec3 v2 = fetch_texel(3 * tri_idx + 2, mesh).xyz;
-                
-                // Compute distance to triangle
                 float dist_sq = pointTriangleDistanceSq(query, v0, v1, v2);
-                float dist = sqrt(dist_sq);
-                
-                // Insert into sorted list if closer than k-th element
-                if (count < k || dist < result_dists[k-1]) {
-                    // Find insertion position
-                    int insert_pos = count;
-                    for (int j = 0; j < count; j++) {
-                        if (dist < result_dists[j]) {
-                            insert_pos = j;
-                            break;
-                        }
-                    }
-                    
-                    // Shift elements right
-                    int shift_end = min(count, k - 1);
-                    for (int j = shift_end; j > insert_pos; j--) {
-                        result_dists[j] = result_dists[j - 1];
-                        result_indices[j] = result_indices[j - 1];
-                    }
-                    
-                    // Insert new element
-                    result_dists[insert_pos] = dist;
-                    result_indices[insert_pos] = tri_idx;
-                    
-                    if (count < k) count++;
+                knn_insert(r, tri_idx, sqrt(dist_sq), k);
+            }
+        } else {
+            vec3 left_aabb_min, left_aabb_max;
+            int ll, lr, lps, lpc;
+            fetchBVHNode(bvh_nodes, left_idx, left_aabb_min, left_aabb_max,
+                         ll, lr, lps, lpc);
+            vec3 right_aabb_min, right_aabb_max;
+            int rl, rr, rps, rpc;
+            fetchBVHNode(bvh_nodes, right_idx, right_aabb_min, right_aabb_max,
+                         rl, rr, rps, rpc);
+            
+            float left_dist_sq  = pointAABBDistanceSq(query, left_aabb_min,  left_aabb_max);
+            float right_dist_sq = pointAABBDistanceSq(query, right_aabb_min, right_aabb_max);
+            float kth2 = (r.count >= k) ? r.dists[k-1] * r.dists[k-1] : INFINITY;
+            
+            if (left_dist_sq < right_dist_sq) {
+                if (r.count < k || right_dist_sq <= kth2) stack[stack_ptr++] = right_idx;
+                if (r.count < k || left_dist_sq  <= kth2) stack[stack_ptr++] = left_idx;
+            } else {
+                if (r.count < k || left_dist_sq  <= kth2) stack[stack_ptr++] = left_idx;
+                if (r.count < k || right_dist_sq <= kth2) stack[stack_ptr++] = right_idx;
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// bvhPointsInRadius — struct version (still uses arrays internally but capped at 40)
+// ----------------------------------------------------------------------------
+int bvhPointsInRadius(vec3 query, float radius, int max_results, inout KNNResult r) {
+    knn_init(r);
+    float radius_sq = radius * radius;
+    
+    int stack[BVH_STACK_SIZE];
+    int stack_ptr = 0;
+    stack[stack_ptr++] = 0;
+    
+    while (stack_ptr > 0 && r.count < max_results) {
+        int node_idx = stack[--stack_ptr];
+        
+        vec3 aabb_min, aabb_max;
+        int left_idx, right_idx, prim_start, prim_count;
+        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max,
+                     left_idx, right_idx, prim_start, prim_count);
+        
+        if (pointAABBDistanceSq(query, aabb_min, aabb_max) > radius_sq) continue;
+        
+        if (prim_count > 0) {
+            for (int i = 0; i < prim_count && r.count < max_results; i++) {
+                int prim_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
+                vec3 point = fetch_point(prim_idx);
+                float dist_sq = dot(query - point, query - point);
+                if (dist_sq <= radius_sq) {
+                    r.indices[r.count] = prim_idx;
+                    r.dists[r.count]   = sqrt(dist_sq);
+                    r.count++;
                 }
             }
         } else {
-            // Internal node: push children based on distance
-            vec3 left_aabb_min, left_aabb_max;
-            int left_left, left_right, left_prim_start, left_prim_count;
-            fetchBVHNode(bvh_nodes, left_idx, left_aabb_min, left_aabb_max,
-                        left_left, left_right, left_prim_start, left_prim_count);
-            
-            vec3 right_aabb_min, right_aabb_max;
-            int right_left, right_right, right_prim_start, right_prim_count;
-            fetchBVHNode(bvh_nodes, right_idx, right_aabb_min, right_aabb_max,
-                        right_left, right_right, right_prim_start, right_prim_count);
-            
-            float left_dist_sq = pointAABBDistanceSq(query, left_aabb_min, left_aabb_max);
-            float right_dist_sq = pointAABBDistanceSq(query, right_aabb_min, right_aabb_max);
-            
-            // Push farther child first (so closer child is processed first)
-            if (left_dist_sq < right_dist_sq) {
-                if (right_dist_sq <= kth_dist_sq) stack[stack_ptr++] = right_idx;
-                if (left_dist_sq <= kth_dist_sq) stack[stack_ptr++] = left_idx;
-            } else {
-                if (left_dist_sq <= kth_dist_sq) stack[stack_ptr++] = left_idx;
-                if (right_dist_sq <= kth_dist_sq) stack[stack_ptr++] = right_idx;
-            }
+            stack[stack_ptr++] = left_idx;
+            stack[stack_ptr++] = right_idx;
         }
     }
-    
-    return count;
+    return r.count;
 }
 
-bool intersectSphere( in vec3 ro, in vec3 rd, in vec3 p, in float r, out float t, out vec3 n ) {
-    t = dot( rd, p-ro ) / dot( rd, rd );
-    float d = length( ro + t * rd - p );
+// ----------------------------------------------------------------------------
+// bvhClosestPoint — unchanged except stack size
+// ----------------------------------------------------------------------------
+int bvhClosestPoint(vec3 query, out float min_dist) {
+    min_dist = INFINITY;
+    int closest_idx = -1;
     
-    if ( d > r ) return false;
+    int stack[BVH_STACK_SIZE];
+    int stack_ptr = 0;
+    stack[stack_ptr++] = 0;
     
-    float s = sqrt( r * r - d * d );
-    if ( t - s >= 0. ) {
-        t -= s;
-    } else {
-        t += s;
+    while (stack_ptr > 0) {
+        int node_idx = stack[--stack_ptr];
+        
+        vec3 aabb_min, aabb_max;
+        int left_idx, right_idx, prim_start, prim_count;
+        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max,
+                     left_idx, right_idx, prim_start, prim_count);
+        
+        if (pointAABBDistanceSq(query, aabb_min, aabb_max) > min_dist * min_dist) continue;
+        
+        if (prim_count > 0) {
+            for (int i = 0; i < prim_count; i++) {
+                int prim_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
+                vec3 point = fetch_point(prim_idx);
+                float dist = length(query - point);
+                if (dist < min_dist) { min_dist = dist; closest_idx = prim_idx; }
+            }
+        } else {
+            stack[stack_ptr++] = left_idx;
+            stack[stack_ptr++] = right_idx;
+        }
     }
-    
-    n = normalize( ro + t * rd - p );
-    
-    return t > 0.;
+    return closest_idx;
 }
 
-bool bvhIntersectPointCloud( in vec3 ro, in vec3 rd, in float t_min, in float t_max,
+// ----------------------------------------------------------------------------
+// bvhIntersectPointCloud — unchanged except stack size
+// ----------------------------------------------------------------------------
+bool bvhIntersectPointCloud(in vec3 ro, in vec3 rd, in float t_min, in float t_max,
                             in float sphere_radius,
                             out float hit_t, out int hit_point_idx, out vec3 hit_normal) {
-    if (n_pc_bvh_nodes == 0) {
-        return false;  // No BVH available
-    }
+    if (n_pc_bvh_nodes == 0) return false;
     
     hit_t = t_max;
     hit_point_idx = -1;
     bool found_hit = false;
     
-    int stack[64];
+    int stack[BVH_STACK_SIZE];
     int stack_ptr = 0;
-    stack[stack_ptr++] = 0;  // Start at root
+    stack[stack_ptr++] = 0;
     
     while (stack_ptr > 0) {
         int node_idx = stack[--stack_ptr];
         
-        // Fetch node
         vec3 aabb_min, aabb_max;
         int left_idx, right_idx, prim_start, prim_count;
-        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max, left_idx, right_idx, prim_start, prim_count);
-
+        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max,
+                     left_idx, right_idx, prim_start, prim_count);
+        
         vec3 expansion = vec3(sphere_radius);
         aabb_min -= expansion;
         aabb_max += expansion;
         
-        // Test AABB intersection
         float t_near, t_far;
-        if (!intersectAABB(ro, rd, aabb_min, aabb_max, t_near, t_far)) {
-            continue;
-        }
+        if (!intersectAABB(ro, rd, aabb_min, aabb_max, t_near, t_far)) continue;
+        if (t_near > hit_t || t_far < t_min) continue;
         
-        // Skip if AABB is behind current closest hit
-        if (t_near > hit_t || t_far < t_min) {
-            continue;
-        }
-        
-        // Leaf node: test point spheres
         if (prim_count > 0) {
             for (int i = 0; i < prim_count; i++) {
                 int point_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
                 vec3 point_pos = fetch_point(point_idx);
-                
-                // Test ray-sphere intersection (using existing function)
-                float t;
-                vec3 n;
+                float t; vec3 n;
                 if (intersectSphere(ro, rd, point_pos, sphere_radius, t, n)) {
                     if (t >= t_min && t < hit_t) {
-                        hit_t = t;
-                        hit_point_idx = point_idx;
-                        hit_normal = n;
-                        found_hit = true;
+                        hit_t = t; hit_point_idx = point_idx;
+                        hit_normal = n; found_hit = true;
                     }
                 }
             }
         } else {
-            // Internal node: push children
             stack[stack_ptr++] = left_idx;
             stack[stack_ptr++] = right_idx;
         }
     }
-    
     return found_hit;
 }
 
-bool intersectTriangle(in vec3 ro, in vec3 rd, in vec3 v0, in vec3 v1, in vec3 v2,
-                       out float t, out vec2 bary) {
-    // Möller-Trumbore algorithm
-    const float EPSILON = 1e-8;
-    
-    vec3 edge1 = v1 - v0;
-    vec3 edge2 = v2 - v0;
-    vec3 h = cross(rd, edge2);
-    float a = dot(edge1, h);
-    
-    // Ray parallel to triangle
-    if (abs(a) < EPSILON) return false;
-    
-    float f = 1.0 / a;
-    vec3 s = ro - v0;
-    float u = f * dot(s, h);
-    
-    if (u < 0.0 || u > 1.0) return false;
-    
-    vec3 q = cross(s, edge1);
-    float v = f * dot(rd, q);
-    
-    if (v < 0.0 || u + v > 1.0) return false;
-    
-    t = f * dot(edge2, q);
-    
-    if (t < EPSILON) return false;
-    
-    bary = vec2(u, v);
-    return true;
-}
-
-bool bvhIntersectMesh(in sampler2D mesh, in sampler2D bvh_nodes, in sampler2D bvh_indices, in int n_bvh_nodes, in vec3 ro, in vec3 rd, in float t_min, in float t_max,
+// ----------------------------------------------------------------------------
+// bvhIntersectMesh — unchanged except stack size
+// ----------------------------------------------------------------------------
+bool bvhIntersectMesh(in sampler2D mesh, in sampler2D bvh_nodes, in sampler2D bvh_indices,
+                      in int n_bvh_nodes, in vec3 ro, in vec3 rd, in float t_min, in float t_max,
                       out float hit_t, out int hit_tri_idx, out vec2 hit_bary) {
-    if (n_bvh_nodes == 0) {
-        return false;  // No BVH available
-    }
-    
+    if (n_bvh_nodes == 0) return false;
     hit_t = t_max;
     hit_tri_idx = -1;
     bool found_hit = false;
     
-    int stack[64];
+    int stack[BVH_STACK_SIZE];
     int stack_ptr = 0;
-    stack[stack_ptr++] = 0;  // Start at root
+    stack[stack_ptr++] = 0;
     
     while (stack_ptr > 0) {
         int node_idx = stack[--stack_ptr];
-        
-        // Fetch node from mesh BVH
         int base_idx = node_idx * 3;
         vec4 data0 = fetch_texel(base_idx, bvh_nodes);
         vec4 data1 = fetch_texel(base_idx + 1, bvh_nodes);
         vec4 data2 = fetch_texel(base_idx + 2, bvh_nodes);
-        
         vec3 aabb_min = data0.xyz;
         vec3 aabb_max = vec3(data0.w, data1.xy);
         int left_idx = int(data1.z);
@@ -631,112 +527,124 @@ bool bvhIntersectMesh(in sampler2D mesh, in sampler2D bvh_nodes, in sampler2D bv
         int prim_start = int(data2.x);
         int prim_count = int(data2.y);
         
-        // Test AABB intersection
         float t_near, t_far;
-        if (!intersectAABB(ro, rd, aabb_min, aabb_max, t_near, t_far)) {
-            continue;
-        }
+        if (!intersectAABB(ro, rd, aabb_min, aabb_max, t_near, t_far)) continue;
+        if (t_near > hit_t || t_far < t_min) continue;
         
-        // Skip if AABB is behind current closest hit
-        if (t_near > hit_t || t_far < t_min) {
-            continue;
-        }
-        
-        // Leaf node: test triangles
         if (prim_count > 0) {
             for (int i = 0; i < prim_count; i++) {
                 int tri_idx = int(fetch_texel(prim_start + i, bvh_indices).x);
-                
-                // Fetch triangle vertices from shape texture
-                vec3 v0 = fetch_texel(3 * tri_idx, mesh).xyz;
+                vec3 v0 = fetch_texel(3 * tri_idx,     mesh).xyz;
                 vec3 v1 = fetch_texel(3 * tri_idx + 1, mesh).xyz;
                 vec3 v2 = fetch_texel(3 * tri_idx + 2, mesh).xyz;
-                
-                // Test ray-triangle intersection
-                float t;
-                vec2 bary;
+                float t; vec2 bary;
                 if (intersectTriangle(ro, rd, v0, v1, v2, t, bary)) {
                     if (t >= t_min && t < hit_t) {
-                        hit_t = t;
-                        hit_tri_idx = tri_idx;
-                        hit_bary = bary;
-                        found_hit = true;
+                        hit_t = t; hit_tri_idx = tri_idx;
+                        hit_bary = bary; found_hit = true;
                     }
                 }
             }
         } else {
-            // Internal node: push children
-            // Push in order (closer first for better early termination)
             stack[stack_ptr++] = left_idx;
             stack[stack_ptr++] = right_idx;
         }
     }
-    
     return found_hit;
 }
 
-// ==== colormaps / visualization
+// ----------------------------------------------------------------------------
+// bvhGatherStats — unchanged except stack size
+// ----------------------------------------------------------------------------
+struct RadiusStats { int count; float max_dist; float sum_dist; };
+
+void bvhGatherStats(vec3 query, float radius, out RadiusStats stats) {
+    stats.count = 0;
+    stats.max_dist = 0.0;
+    stats.sum_dist = 0.0;
+    if (n_pc_bvh_nodes == 0) return;
+    
+    float radius_sq = radius * radius;
+    int stack[BVH_STACK_SIZE];
+    int stack_ptr = 0;
+    stack[stack_ptr++] = 0;
+    
+    while (stack_ptr > 0) {
+        int node_idx = stack[--stack_ptr];
+        vec3 aabb_min, aabb_max;
+        int left_idx, right_idx, prim_start, prim_count;
+        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max,
+                     left_idx, right_idx, prim_start, prim_count);
+        if (pointAABBDistanceSq(query, aabb_min, aabb_max) > radius_sq) continue;
+        
+        if (prim_count > 0) {
+            for (int i = 0; i < prim_count; i++) {
+                int prim_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
+                vec3 point = fetch_point(prim_idx);
+                float dist_sq = dot(query - point, query - point);
+                if (dist_sq <= radius_sq) {
+                    float dist = sqrt(dist_sq);
+                    stats.count++;
+                    stats.sum_dist += dist;
+                    stats.max_dist = max(stats.max_dist, dist);
+                }
+            }
+        } else {
+            stack[stack_ptr++] = left_idx;
+            stack[stack_ptr++] = right_idx;
+        }
+    }
+}
+
+// ---- KNNResult and BVH traversals (as in previous message, unchanged)
+//      ... paste KNNResult, knn_init, knn_insert,
+//      bvhKNearestNeighbors, bvhKNearestTriangles, bvhPointsInRadius,
+//      bvhClosestPoint, bvhIntersectPointCloud, bvhIntersectMesh,
+//      RadiusStats, bvhGatherStats here ...
+
+// ==== colormaps
 
 /* shadertoy.com/view/tstcDX */ vec3 rgb2hsv(vec3 c); vec3 hsv2rgb(vec3 c); vec3 rgb2hsv(vec3 c){const vec4 K=vec4(0.,-1./3.,2./3.,-1.);vec4 p=mix(vec4(c.bg,K.wz),vec4(c.gb,K.xy),step(c.b,c.g));vec4 q=mix(vec4(p.xyw,c.r),vec4(c.r,p.yzx),step(p.x,c.r));float d=q.x-min(q.w,q.y);const float e=1.e-10;return vec3(abs(q.z+(q.w-q.y)/(6.*d+e)),d/(q.x+e),q.x);} vec3 hsv2rgb(vec3 c){const vec4 K=vec4(1.,2./3.,1./3.,3.);vec3 p=abs(fract(c.xxx+K.xyz)*6.-K.www);return c.z*mix(K.xxx,clamp(p-K.xxx,0.,1.),c.y);}
 
-// return the index of the closest point in the point cloud
 int closestPoint(vec3 q) {
     if (n_pc_bvh_nodes == 0) {
-        // Fallback to brute force
         float d = INFINITY;
         int idx = 0;
         for (int i = 0; i < n_points; i++) {
             float dist = length(q - fetch_point(i));
-            if (dist < d) {
-                d = dist;
-                idx = i;
-            }
+            if (dist < d) { d = dist; idx = i; }
         }
         return idx;
     }
-    
-    // Use BVH
     float min_dist;
-    int idx = bvhClosestPoint(q, min_dist);
-    return idx;
+    return bvhClosestPoint(q, min_dist);
 }
 
-// return the index of the farthest point in the point cloud
 int farthest_point(vec3 q) {
     if (n_pc_bvh_nodes == 0 || neighborhood_size <= 0 || neighborhood_size >= n_points) {
-        // Fallback
         float d = 0;
         int idx = 0;
         for (int i = 0; i < n_points; i++) {
             float dist = length(q - fetch_point(i));
-            if (dist > d) {
-                d = dist;
-                idx = i;
-            }
+            if (dist > d) { d = dist; idx = i; }
         }
         return idx;
     }
-    
-    // Use BVH
-    int indices[max_neighborhood_size];
-    float dists[max_neighborhood_size];
-    int count = bvhPointsInRadius(q, neighborhood_radius, max_neighborhood_size, indices, dists);
+    KNNResult r;
+    int count = bvhPointsInRadius(q, neighborhood_radius, max_neighborhood_size, r);
     if (count == 0) {
-        count = bvhKNearestNeighbors(q, neighborhood_size, max_neighborhood_size, indices, dists);
+        bvhKNearestNeighbors(q, neighborhood_size, r);
     }
     float max_dist = 0.0;
-    int idx = indices[0];
-    for (int i = 0; i < count; i++) {
-        if (dists[i] > max_dist) {
-            max_dist = dists[i];
-            idx = indices[i];
-        }
+    int idx = r.indices[0];
+    for (int i = 0; i < r.count; i++) {
+        if (r.dists[i] > max_dist) { max_dist = r.dists[i]; idx = r.indices[i]; }
     }
     return idx;
 }
 
 float compute_shift(in vec3 q) {
-    return 0.5*length(q-fetch_point(farthest_point(q)));
+    return 0.5 * length(q - fetch_point(farthest_point(q)));
 }
 
 float segment(float edge0, float edge1, float x) {
@@ -765,92 +673,48 @@ vec3 colormap_SDF(float t) {
            segment(0.5,1.0,t) * colormap_grapefruit(2.0*(t-0.5));
 }
 
-/*
- * Helper function for darken_color()
- * https://stackoverflow.com/a/141943
- */
 vec3 redistribute_rgb(vec3 color) {
-    
     float r = color.x; float g = color.y; float b = color.z;
-    // If no need for clamping
     float m = max(max(r,g),b);
-    if (m <= 1.0) {
-        return color;
-    }
-    // If all values exceed max
+    if (m <= 1.0) return color;
     float total = r + g + b;
-    if (total >= 3.0) {
-        return vec3(1.0, 1.0, 1.0);
-    }
-    // Else, "redistribute" values so the hue is preserved.
+    if (total >= 3.0) return vec3(1.0, 1.0, 1.0);
     float x = (3.0 - total) / (3.0 * m - total);
     float gray = 1.0 - x * m;
     return vec3(gray + x * r, gray + x * g, gray + x * b);
 }
 
-/*
- * Darken a color, with 0 <= t <= 1.
- * t = 0 corresponds to black, t = 1 corresponds to original color.
- */
 vec3 darken_color(vec3 color, float t) {
-    
     return redistribute_rgb(t * color);
 }
 
-//==== convolutional SDF approximations
+// ==== convolutional SDF approximations
 
-/* unsigned distance */
 float logSumExp(in vec3 q, in float lambda_scale) {
     float shift = compute_shift(q);
     float lambda = lambda_scale * maxExpArg / shift;
     shift = maxExpArg/lambda;
     float w = 0.;
-
-    for ( int i = 0; i < n_points; i++ ) {
+    for (int i = 0; i < n_points; i++) {
         vec3 rVec = q - fetch_point(i);
         float r = length(rVec);
-        float weight = exp(-lambda*(r-shift));
-        w += weight;
+        w += exp(-lambda*(r-shift));
     }
     return -log(w)/lambda + shift;
 }
 
-vec3 logSumExpGradient(in vec3 q, in float lambda_scale) {
-    vec3 A = vec3(0.,0.,0.);
-    vec3 B = vec3(0.,0.,0.);
-    float C = 0.;
-    float shift = compute_shift(q);
-    float lambda = lambda_scale * maxExpArg / shift;
-    for ( int i = 0; i < n_points; i++ ) {
-        vec3 rVec = q - fetch_point(i);
-        float r = length(rVec);
-        vec3 rHat = rVec/r;
-        float weight = exp(-lambda*(r-shift));
-        float h = 1.;
-        vec3 grad_h = vec3(0.,0.,0.);
-        A += grad_h*weight;
-        B += lambda*rHat*h*weight;
-        C += weight*h;
-    }
-    return -(A-B)/(C*lambda);
-}
-
 void logSumExpAndGradient(in vec3 q, in float lambda_scale, out float phi, out vec3 gradient) {
-    vec3 A = vec3(0.,0.,0.);
-    vec3 B = vec3(0.,0.,0.);
-    float C = 0.;
+    vec3 A = vec3(0.), B = vec3(0.);
+    float C = 0., w = 0.;
     float shift = compute_shift(q);
     float lambda = lambda_scale * maxExpArg / shift;
-    float w = 0.;
-    for ( int i = 0; i < n_points; i++ ) {
+    for (int i = 0; i < n_points; i++) {
         vec3 rVec = q - fetch_point(i);
         float r = length(rVec);
         vec3 rHat = rVec/r;
         float weight = exp(-lambda*(r-shift));
         w += weight;
         float h = 1.;
-        vec3 grad_h = vec3(0.,0.,0.);
-        A += grad_h*weight;
         B += lambda*rHat*h*weight;
         C += weight*h;
     }
@@ -858,77 +722,37 @@ void logSumExpAndGradient(in vec3 q, in float lambda_scale, out float phi, out v
     phi = -log(w)/lambda + shift;
 }
 
-/* unsigned distance */
 float selfNormalizedLogSumExp(in vec3 q, in float lambda_scale) {
-    float u = 0.;
-    float normalization = 0.;
+    float u = 0., normalization = 0.;
     float shift = compute_shift(q);
     float lambda = lambda_scale * maxExpArg / shift;
-    for ( int i = 0; i < n_points; i++ ) {
+    for (int i = 0; i < n_points; i++) {
         vec3 rVec = q - fetch_point(i);
         float r = length(rVec);
         float weight = exp(-lambda*(r-shift));
-        if (usePointAreas) {
-            float area = fetch_texel(2*i, pointcloud).w;
-            weight *= area;
-        }
+        if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
         u += r * weight;
         normalization += weight;
     }
     return u/normalization;
 }
 
-vec3 selfNormalizedLogSumExpGradient(in vec3 q, in float lambda_scale) {
-    vec3 A = vec3(0.,0.,0.);
-    vec3 B = vec3(0.,0.,0.);
-    float C = 0.;
-    float D = 0.;
-    float shift = compute_shift(q);
-    float lambda = lambda_scale * maxExpArg / shift;
-    for ( int i = 0; i < n_points; i++ ) {
-        vec3 p_i = fetch_point(i);
-        vec3 rVec = q - p_i;
-        float r = length(rVec);
-        vec3 rHat = rVec/r;
-        float weight = exp(-lambda*(r-shift));
-        if (usePointAreas) {
-            float area = fetch_texel(2*i, pointcloud).w;
-            weight *= area;
-        }
-        float h = r;
-        vec3 grad_h = rHat;
-        A += (grad_h - lambda*h*rHat)*weight;
-        B += rHat*weight;
-        C += h*weight;
-        D += weight;
-    }
-    return A/D + lambda*(B*C)/(D*D);
-}
-
 void selfNormalizedLogSumExpAndGradient(in vec3 q, in float lambda_scale, out float phi, out vec3 gradient) {
-    vec3 A = vec3(0.,0.,0.);
-    vec3 B = vec3(0.,0.,0.);
-    float C = 0.;
-    float D = 0.;
-    float u = 0.;
-    float normalization = 0.;
+    vec3 A = vec3(0.), B = vec3(0.);
+    float C = 0., D = 0., u = 0., normalization = 0.;
     float shift = compute_shift(q);
     float lambda = lambda_scale * maxExpArg / shift;
-    for ( int i = 0; i < n_points; i++ ) {
+    for (int i = 0; i < n_points; i++) {
         vec3 p_i = fetch_point(i);
         vec3 rVec = q - p_i;
         float r = length(rVec);
         vec3 rHat = rVec/r;
         float weight = exp(-lambda*(r-shift));
-        if (usePointAreas) {
-            float area = fetch_texel(2*i, pointcloud).w;
-            weight *= area;
-        }
+        if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
         float h = r;
-        vec3 grad_h = rHat;
         u += h * weight;
         normalization += weight;
-        A += (grad_h - lambda*h*rHat)*weight;
+        A += (rHat - lambda*h*rHat)*weight;
         B += rHat*weight;
         C += h*weight;
         D += weight;
@@ -939,38 +763,34 @@ void selfNormalizedLogSumExpAndGradient(in vec3 q, in float lambda_scale, out fl
 
 void windingNumber(in vec3 q, out float phi) {
     phi = 0.0;
-    for ( int i = 0; i < n_points; i++ ) {
+    for (int i = 0; i < n_points; i++) {
         vec3 p_i = fetch_point(i);
         vec3 n_i = fetch_normal(i);
         vec3 r_vec = q - p_i;
         float r = length(r_vec);
         float P = dot(n_i, r_vec) / (r*r*r) / (4.0 * PI);
-        float area = fetch_texel(2*i, pointcloud).w; // warning: sometimes texture is overloaded to vis outliers
+        float area = fetch_texel(2*i, pointcloud).w;
         phi += area * P;
     }
 }
 
+// ----------------------------------------------------------------------------
+// signedLogSumExpGradient — struct version
+// ----------------------------------------------------------------------------
 float signedLogSumExpGradient(in vec3 q, in float lambda_scale, out vec3 gradient) {
-    
     float shift = compute_shift(q);
     float lambda = lambda_scale * maxExpArg / shift;
 
     if (n_pc_bvh_nodes == 0 || neighborhood_size <= 0 || neighborhood_size >= n_points) {
-        vec3 A = vec3(0.,0.,0.);
-        vec3 B = vec3(0.,0.,0.);
-        float C = 0.;
-        float w = 0.;
-        for ( int i = 0; i < n_points; i++ ) {
+        vec3 A = vec3(0.), B = vec3(0.);
+        float C = 0., w = 0.;
+        for (int i = 0; i < n_points; i++) {
             vec3 p_i = fetch_point(i);
             vec3 rVec = q - p_i;
             float r = length(rVec);
             float weight = exp(-lambda*(r - shift));
-                if (usePointAreas) {
-                float area = fetch_texel(2*i, pointcloud).w;
-                weight *= area;
-            }
+            if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
             vec3 n_i = fetch_normal(i);
-            //float h = dot(rVec, n_i)/r;
             float h = (lambda * r + 1.0) * dot(rVec, n_i) / (2.*PI*r*r*r);
             vec3 rHat = rVec/r;
             vec3 grad_h = n_i/dot(rVec,n_i) - rVec/dot(rVec,rVec);
@@ -983,29 +803,23 @@ float signedLogSumExpGradient(in vec3 q, in float lambda_scale, out vec3 gradien
         return sign(w)*(-log(abs(w))/lambda + shift);
     }
 
-    // BVH
-    int indices[max_neighborhood_size];
-    float dists[max_neighborhood_size];
-    int count = bvhKNearestNeighbors(q, neighborhood_size, max_neighborhood_size, indices, dists);
-    if (count == 0) return 0.0;
+    KNNResult r;
+    bvhKNearestNeighbors(q, neighborhood_size, r);
+    if (r.count == 0) return 0.0;
 
     float w = 0.;
-    vec3 A = vec3(0.,0.,0.);
-    vec3 B = vec3(0.,0.,0.);
+    vec3 A = vec3(0.), B = vec3(0.);
     float C = 0.;
-    for ( int idx = 0; idx < count; idx++ ) {
-        int i = indices[idx];
+    for (int idx = 0; idx < r.count; idx++) {
+        int i = r.indices[idx];
         vec3 p_i = fetch_point(i);
         vec3 rVec = q - p_i;
-        float r = length(rVec);
-        float weight = exp(-lambda*(r-shift));
-        if (usePointAreas) {
-            float area = fetch_texel(2*i, pointcloud).w;
-            weight *= area;
-        }
+        float rr = length(rVec);
+        float weight = exp(-lambda*(rr-shift));
+        if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
         vec3 n_i = fetch_normal(i);
-        float h = dot(rVec, n_i)/r;
-        vec3 rHat = rVec/r;
+        float h = dot(rVec, n_i)/rr;
+        vec3 rHat = rVec/rr;
         vec3 grad_h = n_i/dot(rVec,n_i) - rVec/dot(rVec,rVec);
         w += h * weight;
         A += grad_h*weight;
@@ -1016,29 +830,25 @@ float signedLogSumExpGradient(in vec3 q, in float lambda_scale, out vec3 gradien
     return -sign(w)*(log(abs(w))/lambda);
 }
 
+// ----------------------------------------------------------------------------
+// regularizedSignedLogSumExpGradient — struct version
+// ----------------------------------------------------------------------------
 float regularizedSignedLogSumExpGradient(in vec3 q, in float lambda_scale, out vec3 gradient) {
-    
     float shift = compute_shift(q);
     float lambda = lambda_scale * maxExpArg / shift;
 
     if (n_pc_bvh_nodes == 0 || neighborhood_size <= 0 || neighborhood_size >= n_points) {
-        vec3 A = vec3(0.,0.,0.);
-        vec3 B = vec3(0.,0.,0.);
-        float C = 0.;
-        float w = 0.;
-        for ( int i = 0; i < n_points; i++ ) {
+        vec3 A = vec3(0.), B = vec3(0.);
+        float C = 0., w = 0.;
+        for (int i = 0; i < n_points; i++) {
             vec3 p_i = fetch_point(i);
             vec3 rVec = q - p_i;
             float r = length(rVec);
             float t = r / reg_epsilon;
             float S = erf(t) - 2.0*t / sqrt(PI) * exp(-t*t);
             float weight = exp(-lambda*(r - shift));
-            if (usePointAreas) {
-                float area = fetch_texel(2*i, pointcloud).w;
-                weight *= area;
-            }
+            if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
             vec3 n_i = fetch_normal(i);
-            //float h = dot(rVec, n_i)/r;
             float h = (lambda * r + 1.0) * dot(rVec, n_i) / (2.*PI*r*r*r);
             vec3 rHat = rVec/r;
             vec3 grad_h = n_i/dot(rVec,n_i) - rVec/dot(rVec,rVec);
@@ -1051,31 +861,25 @@ float regularizedSignedLogSumExpGradient(in vec3 q, in float lambda_scale, out v
         return sign(w)*(-log(abs(w))/lambda + shift);
     }
 
-    // BVH
-    int indices[max_neighborhood_size];
-    float dists[max_neighborhood_size];
-    int count = bvhKNearestNeighbors(q, neighborhood_size, max_neighborhood_size, indices, dists);
-    if (count == 0) return 0.0;
+    KNNResult r;
+    bvhKNearestNeighbors(q, neighborhood_size, r);
+    if (r.count == 0) return 0.0;
 
     float w = 0.;
-    vec3 A = vec3(0.,0.,0.);
-    vec3 B = vec3(0.,0.,0.);
+    vec3 A = vec3(0.), B = vec3(0.);
     float C = 0.;
-    for ( int idx = 0; idx < count; idx++ ) {
-        int i = indices[idx];
+    for (int idx = 0; idx < r.count; idx++) {
+        int i = r.indices[idx];
         vec3 p_i = fetch_point(i);
         vec3 rVec = q - p_i;
-        float r = length(rVec);
-        float t = r / reg_epsilon;
+        float rr = length(rVec);
+        float t = rr / reg_epsilon;
         float S = erf(t) - 2.0*t / sqrt(PI) * exp(-t*t);
-        float weight = exp(-lambda*(r-shift));
-        if (usePointAreas) {
-            float area = fetch_texel(2*i, pointcloud).w;
-            weight *= area;
-        }
+        float weight = exp(-lambda*(rr-shift));
+        if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
         vec3 n_i = fetch_normal(i);
-        float h = dot(rVec, n_i)/r;
-        vec3 rHat = rVec/r;
+        float h = dot(rVec, n_i)/rr;
+        vec3 rHat = rVec/rr;
         vec3 grad_h = n_i/dot(rVec,n_i) - rVec/dot(rVec,rVec);
         w += S * h * weight;
         A += grad_h*weight;
@@ -1086,31 +890,28 @@ float regularizedSignedLogSumExpGradient(in vec3 q, in float lambda_scale, out v
     return -sign(w)*(log(abs(w))/lambda);
 }
 
+// ----------------------------------------------------------------------------
+// selfNormalizedSignedLogSumExpGradient — struct version
+// ----------------------------------------------------------------------------
 float selfNormalizedSignedLogSumExpGradient(in vec3 q, in float lambda_scale, out vec3 gradient) {
-    
     float shift = compute_shift(q);
     float lambda = lambda_scale * maxExpArg / shift;
 
     if (n_pc_bvh_nodes == 0 || neighborhood_size <= 0 || neighborhood_size >= n_points) {
         float u = 0.;
-        vec3 A = vec3(0.,0.,0.);
-        vec3 B = vec3(0.,0.,0.);
-        float C = 0.;
-        float D = 0.;
-        for ( int i = 0; i < n_points; i++ ) {
+        vec3 A = vec3(0.), B = vec3(0.);
+        float C = 0., D = 0.;
+        for (int i = 0; i < n_points; i++) {
             vec3 p_i = fetch_point(i);
             vec3 rVec = q - p_i;
             float r = length(rVec);
             vec3 rHat = rVec / r;
             float weight = exp(-lambda*(r-shift));
-            if (usePointAreas) {
-                float area = fetch_texel(2*i, pointcloud).w;
-                weight *= area;
-            }
+            if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
             vec3 n_i = fetch_normal(i);
             float h = dot(rVec, n_i);
             vec3 grad_h = n_i;
-            u += dot(rVec, fetch_normal(i)) * weight;
+            u += dot(rVec, n_i) * weight;
             A += (grad_h - lambda*h*rHat)*weight;
             B += rHat*weight;
             C += h*weight;
@@ -1120,32 +921,24 @@ float selfNormalizedSignedLogSumExpGradient(in vec3 q, in float lambda_scale, ou
         return u / D;
     }
 
-    // BVH
-    int indices[max_neighborhood_size];
-    float dists[max_neighborhood_size];
-    int count = bvhKNearestNeighbors(q, neighborhood_size, max_neighborhood_size, indices, dists);
-    if (count == 0) return 0.;
+    KNNResult r;
+    bvhKNearestNeighbors(q, neighborhood_size, r);
+    if (r.count == 0) return 0.;
 
-    vec3 A = vec3(0.,0.,0.);
-    vec3 B = vec3(0.,0.,0.);
-    float C = 0.;
-    float D = 0.;
-    float u = 0.;
-    for ( int idx = 0; idx < count; idx++ ) {
-        int i = indices[idx];
+    vec3 A = vec3(0.), B = vec3(0.);
+    float C = 0., D = 0., u = 0.;
+    for (int idx = 0; idx < r.count; idx++) {
+        int i = r.indices[idx];
         vec3 p_i = fetch_point(i);
         vec3 rVec = q - p_i;
-        float r = length(rVec);
-        vec3 rHat = rVec / r;
-        float weight = exp(-lambda*(r-shift));
-        if (usePointAreas) {
-            float area = fetch_texel(2*i, pointcloud).w;
-            weight *= area;
-        }
+        float rr = length(rVec);
+        vec3 rHat = rVec / rr;
+        float weight = exp(-lambda*(rr-shift));
+        if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
         vec3 n_i = fetch_normal(i);
         float h = dot(rVec, n_i);
         vec3 grad_h = n_i;
-        u += dot(rVec, fetch_normal(i)) * weight;
+        u += dot(rVec, n_i) * weight;
         A += (grad_h - lambda*h*rHat)*weight;
         B += rHat*weight;
         C += h*weight;
@@ -1155,23 +948,20 @@ float selfNormalizedSignedLogSumExpGradient(in vec3 q, in float lambda_scale, ou
     return u/D;
 }
 
+// ----------------------------------------------------------------------------
+// Torus helpers
+// ----------------------------------------------------------------------------
 float signedTorusDistance(vec3 q, vec3 center, vec3 axis, float R, float r) {
     vec3 rVec = q - center;
     vec2 u = vec2(length(cross(rVec, axis)) - R, dot(rVec, axis));
-    float d = length(u) - abs(r);
-    return sign(r) * d;
-
-    vec3 rad = rVec - dot(rVec, axis) * axis;
-    vec2 v = vec2(length(rad) - R, dot(rVec, axis));
-    v /= length(v);
-    vec3 cp = center + (R + r * v.x) * normalize(rad) + r * v.y * axis; // closest point
+    return sign(r) * (length(u) - abs(r));
 }
 
 vec3 rotation_to_cartesian(in vec2 angles) {
-  float theta = angles.x;
-  float phi = angles.y;
-  float sin_phi = sin(phi);
-  return vec3(cos(theta) * sin_phi, sin(theta) * sin_phi, cos(phi));
+    float theta = angles.x;
+    float phi = angles.y;
+    float sin_phi = sin(phi);
+    return vec3(cos(theta) * sin_phi, sin(theta) * sin_phi, cos(phi));
 }
 
 void get_torus_params(in int i, in sampler2D texture, out vec3 center, out vec3 axis, out float R, out float r) {
@@ -1182,99 +972,31 @@ void get_torus_params(in int i, in sampler2D texture, out vec3 center, out vec3 
     R = radii.x; r = radii.y;
 }
 
-// BVH traversal
-
-struct RadiusStats {
-    int count;
-    float max_dist;
-    float sum_dist;
-};
-
-void bvhGatherStats(vec3 query, float radius, out RadiusStats stats) {
-    stats.count = 0;
-    stats.max_dist = 0.0;
-    stats.sum_dist = 0.0;
-    
-    if (n_pc_bvh_nodes == 0) return;
-    
-    float radius_sq = radius * radius;
-    
-    int stack[64];
-    int stack_ptr = 0;
-    stack[stack_ptr++] = 0;
-    
-    while (stack_ptr > 0) {
-        int node_idx = stack[--stack_ptr];
-        
-        vec3 aabb_min, aabb_max;
-        int left_idx, right_idx, prim_start, prim_count;
-        fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max, 
-                     left_idx, right_idx, prim_start, prim_count);
-        
-        float node_dist_sq = pointAABBDistanceSq(query, aabb_min, aabb_max);
-        if (node_dist_sq > radius_sq) {
-            continue;
-        }
-        
-        if (prim_count > 0) {
-            // Leaf node: process points
-            for (int i = 0; i < prim_count; i++) {
-                int prim_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
-                vec3 point = fetch_point(prim_idx);
-                vec3 diff = query - point;
-                float dist_sq = dot(diff, diff);
-                
-                if (dist_sq <= radius_sq) {
-                    float dist = sqrt(dist_sq);
-                    stats.count++;
-                    stats.sum_dist += dist;
-                    stats.max_dist = max(stats.max_dist, dist);
-                }
-            }
-        } else {
-            // Internal node: push children
-            stack[stack_ptr++] = left_idx;
-            stack[stack_ptr++] = right_idx;
-        }
-    }
-}
-
 // ----------------------------------------------------------------------------
-// PASS 2: Weighted accumulation
+// blendedTorusDistanceGradient — struct version
 // ----------------------------------------------------------------------------
-
 struct TorusAccumulator {
-    float g;                        // weighted sum of g_i(x)
-    vec3 grad_g_minus_lambda_n_g;   // weighted sum of (∇g_i - λ r̂_i g_i)
-    vec3 n;                         // weighted sum of r̂_i
-    float normalization;            // sum of weights
+    float g;
+    vec3  grad_g_minus_lambda_n_g;
+    vec3  n;
+    float normalization;
 };
 
-// Accumulate contribution from a single point
 void accumulateTorusPoint(vec3 q, int pointIdx, sampler2D torusTexture,
                           float lambda, float shift, inout TorusAccumulator acc) {
     vec3 p_i = fetch_point(pointIdx);
     vec3 diff = q - p_i;
     float dist = length(diff);
-    
-    // Skip if point is exactly at query (avoid division by zero)
     if (dist < 1e-10) return;
-    
     float weight = exp(-lambda * (dist - shift));
-    
-    // Skip if weight is NaN or negligible
     if (isnan(weight) || weight < 1e-30) return;
     
-    // Get torus parameters
     vec3 center, axis;
     float R, r;
     get_torus_params(pointIdx, torusTexture, center, axis, R, r);
     
-    // Compute torus signed distance g_i(q)
     vec3 rVec = q - center;
     float v = length(cross(rVec, axis));
-    
-    // Skip degenerate case
     if (v < 1e-10) return;
     
     vec2 u = vec2(v - R, dot(rVec, axis));
@@ -1284,144 +1006,101 @@ void accumulateTorusPoint(vec3 q, int pointIdx, sampler2D torusTexture,
     float d = u_len - abs(r);
     float s = sign(r);
     float g_z = s * d;
-    
     if (isnan(g_z)) return;
     
-    // Compute gradient ∇g_i(q)
-    // G is the 2x3 Jacobian of (v - R, dot(rVec, axis)) w.r.t. q
-    float G_11 = (axis.x*axis.y*(center.y-q.y) + axis.x*axis.z*(center.z-q.z) 
+    float G_11 = (axis.x*axis.y*(center.y-q.y) + axis.x*axis.z*(center.z-q.z)
                   - (axis.y*axis.y + axis.z*axis.z)*(center.x-q.x)) / v;
-    float G_12 = (axis.x*axis.y*(center.x-q.x) + axis.y*axis.z*(center.z-q.z) 
+    float G_12 = (axis.x*axis.y*(center.x-q.x) + axis.y*axis.z*(center.z-q.z)
                   - (axis.x*axis.x + axis.z*axis.z)*(center.y-q.y)) / v;
-    float G_13 = (axis.x*axis.z*(center.x-q.x) + axis.y*axis.z*(center.y-q.y) 
+    float G_13 = (axis.x*axis.z*(center.x-q.x) + axis.y*axis.z*(center.y-q.y)
                   - (axis.x*axis.x + axis.y*axis.y)*(center.z-q.z)) / v;
-    float G_21 = axis.x;
-    float G_22 = axis.y;
-    float G_23 = axis.z;
     
     vec2 w = u / u_len;
-    vec3 grad_g = s * vec3(w.x*G_11 + w.y*G_21, 
-                           w.x*G_12 + w.y*G_22, 
-                           w.x*G_13 + w.y*G_23);
+    vec3 grad_g = s * vec3(w.x*G_11 + w.y*axis.x,
+                           w.x*G_12 + w.y*axis.y,
+                           w.x*G_13 + w.y*axis.z);
     
-    // Unit direction from point to query
     vec3 rHat = diff / dist;
-    
-    // Accumulate
     acc.grad_g_minus_lambda_n_g += weight * (grad_g - lambda * rHat * g_z);
     acc.g += weight * g_z;
     acc.n += weight * rHat;
     acc.normalization += weight;
 }
 
-// BVH traversal with direct accumulation
 void bvhAccumulateInRadius(vec3 query, float radius, sampler2D torusTexture,
                            float lambda, float shift, inout TorusAccumulator acc) {
     if (n_pc_bvh_nodes == 0) return;
-    
     float radius_sq = radius * radius;
-    
-    int stack[64];
+    int stack[BVH_STACK_SIZE];
     int stack_ptr = 0;
     stack[stack_ptr++] = 0;
     
     while (stack_ptr > 0) {
         int node_idx = stack[--stack_ptr];
-        
         vec3 aabb_min, aabb_max;
         int left_idx, right_idx, prim_start, prim_count;
         fetchBVHNode(pc_bvh_nodes, node_idx, aabb_min, aabb_max,
                      left_idx, right_idx, prim_start, prim_count);
-        
-        float node_dist_sq = pointAABBDistanceSq(query, aabb_min, aabb_max);
-        if (node_dist_sq > radius_sq) {
-            continue;
-        }
-        
+        if (pointAABBDistanceSq(query, aabb_min, aabb_max) > radius_sq) continue;
         if (prim_count > 0) {
-            // Leaf node: accumulate all points in radius
             for (int i = 0; i < prim_count; i++) {
                 int prim_idx = int(fetch_texel(prim_start + i, pc_bvh_prim_indices).x);
                 vec3 point = fetch_point(prim_idx);
-                float dist_sq = dot(query - point, query - point);
-                
-                if (dist_sq <= radius_sq) {
-                    accumulateTorusPoint(query, prim_idx, torusTexture, 
-                                         lambda, shift, acc);
+                if (dot(query - point, query - point) <= radius_sq) {
+                    accumulateTorusPoint(query, prim_idx, torusTexture, lambda, shift, acc);
                 }
             }
         } else {
-            // Internal node: push children
             stack[stack_ptr++] = left_idx;
             stack[stack_ptr++] = right_idx;
         }
     }
 }
 
-float blendedTorusDistanceGradient(in vec3 q, in sampler2D texture, 
+float blendedTorusDistanceGradient(in vec3 q, in sampler2D texture,
                                    in float lambda_scale, out vec3 gradient) {
-    
-    // Handle case where BVH is not available or we want all points
     if (n_pc_bvh_nodes == 0 || neighborhood_size <= 0 || neighborhood_size >= n_points) {
-        // Original brute-force implementation
         float shift = compute_shift(q);
         float lambda = lambda_scale * maxExpArg / shift;
-        //lambda = lambda_scale;
-        
         float normalization = 0.0;
         vec3 grad_g_minus_lambda_n_g = vec3(0.0);
         float g = 0.0;
         vec3 n = vec3(0.0);
-        
         vec3 center, axis;
         float R, r;
-        
         for (int i = 0; i < n_points; i++) {
             vec3 p_i = fetch_point(i);
             vec3 diff = q - p_i;
             float dist = length(diff);
-            
             float weight = exp(-lambda * (dist - shift));
-            if (usePointAreas) {
-                float area = fetch_texel(2*i, pointcloud).w;
-                weight *= area;
-            }
-            
+            if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
             get_torus_params(i, texture, center, axis, R, r);
             vec3 rVec = q - center;
             float v = length(cross(rVec, axis));
-            
             vec2 u = vec2(v - R, dot(rVec, axis));
             float u_len = length(u);
-            
             float d = u_len - abs(r);
             float s = sign(r);
             float g_z = s * d;
-            
-            float G_11 = (axis.x*axis.y*(center.y-q.y) + axis.x*axis.z*(center.z-q.z) 
+            float G_11 = (axis.x*axis.y*(center.y-q.y) + axis.x*axis.z*(center.z-q.z)
                           - (axis.y*axis.y + axis.z*axis.z)*(center.x-q.x)) / v;
-            float G_12 = (axis.x*axis.y*(center.x-q.x) + axis.y*axis.z*(center.z-q.z) 
+            float G_12 = (axis.x*axis.y*(center.x-q.x) + axis.y*axis.z*(center.z-q.z)
                           - (axis.x*axis.x + axis.z*axis.z)*(center.y-q.y)) / v;
-            float G_13 = (axis.x*axis.z*(center.x-q.x) + axis.y*axis.z*(center.y-q.y) 
+            float G_13 = (axis.x*axis.z*(center.x-q.x) + axis.y*axis.z*(center.y-q.y)
                           - (axis.x*axis.x + axis.y*axis.y)*(center.z-q.z)) / v;
-            
             vec2 w = u / u_len;
-            vec3 grad_g = s * vec3(w.x*G_11 + w.y*axis.x, 
-                                   w.x*G_12 + w.y*axis.y, 
+            vec3 grad_g = s * vec3(w.x*G_11 + w.y*axis.x,
+                                   w.x*G_12 + w.y*axis.y,
                                    w.x*G_13 + w.y*axis.z);
-            
             vec3 rHat = diff / dist;
-            
             grad_g_minus_lambda_n_g += weight * (grad_g - lambda * rHat * g_z);
             g += weight * g_z;
             n += weight * rHat;
             normalization += weight;
         }
-        
         vec3 A = grad_g_minus_lambda_n_g / normalization;
         float distance = g / normalization;
         vec3 B = lambda * n / normalization;
-
         gradient = A + distance * B;
         return distance;
     }
@@ -1430,7 +1109,6 @@ float blendedTorusDistanceGradient(in vec3 q, in sampler2D texture,
     bvhGatherStats(q, neighborhood_radius, stats);
     
     float shift, lambda;
-    
     TorusAccumulator acc;
     acc.g = 0.0;
     acc.grad_g_minus_lambda_n_g = vec3(0.0);
@@ -1438,41 +1116,20 @@ float blendedTorusDistanceGradient(in vec3 q, in sampler2D texture,
     acc.normalization = 0.0;
     
     if (stats.count > 0) {
-        // Compute shift and lambda from the points found in radius
         shift = 0.5 * stats.max_dist;
         lambda = lambda_scale * maxExpArg / shift;
-        
-        // lambda *= neighborhood_radius / sqrt(3.0);
-        
         bvhAccumulateInRadius(q, neighborhood_radius, texture, lambda, shift, acc);
-        
     } else {
-        // Fallback to k-NN if no points in radius
-        // First pass of k-NN to get max_dist, then accumulate
-        float knn_max_dist;
-        
-        int indices[max_neighborhood_size];
-        float dists[max_neighborhood_size];
+        KNNResult r;
         int k = min(neighborhood_size, max_neighborhood_size);
-        int count = bvhKNearestNeighbors(q, k, max_neighborhood_size, indices, dists);
-        
-        if (count == 0) {
-            gradient = vec3(0.0);
-            return 0.0;
-        }
-        
-        // Find max distance
+        bvhKNearestNeighbors(q, k, r);
+        if (r.count == 0) { gradient = vec3(0.0); return 0.0; }
         float max_dist = 0.0;
-        for (int i = 0; i < count; i++) {
-            max_dist = max(max_dist, dists[i]);
-        }
-        
+        for (int i = 0; i < r.count; i++) max_dist = max(max_dist, r.dists[i]);
         shift = 0.5 * max_dist;
         lambda = lambda_scale * maxExpArg / shift;
-        
-        // Accumulate
-        for (int i = 0; i < count; i++) {
-            accumulateTorusPoint(q, indices[i], texture, lambda, shift, acc);
+        for (int i = 0; i < r.count; i++) {
+            accumulateTorusPoint(q, r.indices[i], texture, lambda, shift, acc);
         }
     }
     
@@ -1480,178 +1137,133 @@ float blendedTorusDistanceGradient(in vec3 q, in sampler2D texture,
     float distance = acc.g / acc.normalization;
     vec3 B = lambda * acc.n / acc.normalization;
     gradient = A + distance * B;
-    
     return distance;
 }
 
 vec3 blendedPointColor(in vec3 q, in sampler2D texture, in float lambda_scale) {
-    
     float shift = compute_shift(q);
     float lambda = lambda_scale * maxExpArg / shift;
-
     if (n_pc_bvh_nodes == 0 || neighborhood_size <= 0 || neighborhood_size >= n_points) {
         float normalization = 0.;
-        vec3 color = vec3(0., 0., 0.);
-        for ( int i = 0; i < n_points; i++ ) {
+        vec3 color = vec3(0.);
+        for (int i = 0; i < n_points; i++) {
             vec3 p_i = fetch_point(i);
             float weight = exp(-lambda*(length(q-p_i)-shift));
-            if (usePointAreas) {
-                float area = fetch_texel(2*i, pointcloud).w;
-                weight *= area;
-            }
+            if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
             color += weight * fetch_texel(i, texture).xyz;
             normalization += weight;
         }
-        // Simply take a linear average.
         return color / normalization;
     }
-
-    // BVH
-    int indices[max_neighborhood_size];
-    float dists[max_neighborhood_size];
-    int count = bvhKNearestNeighbors(q, neighborhood_size, max_neighborhood_size, indices, dists);
-    if (count == 0) return vec3(0.);
-
+    KNNResult r;
+    bvhKNearestNeighbors(q, neighborhood_size, r);
+    if (r.count == 0) return vec3(0.);
     float normalization = 0.;
-    vec3 color = vec3(0., 0., 0.);
-    for ( int idx = 0; idx < count; idx++ ) {
-        int i = indices[idx];
+    vec3 color = vec3(0.);
+    for (int idx = 0; idx < r.count; idx++) {
+        int i = r.indices[idx];
         vec3 p_i = fetch_point(i);
         float weight = exp(-lambda*(length(q-p_i)-shift));
-        if (usePointAreas) {
-            float area = fetch_texel(2*i, pointcloud).w;
-            weight *= area;
-        }
+        if (usePointAreas) weight *= fetch_texel(2*i, pointcloud).w;
         color += weight * fetch_texel(i, texture).xyz;
         normalization += weight;
     }
     return color / normalization;
 }
 
-
-// Compute the signed distance to the original triangle mesh.
-float meshSDF(in sampler2D mesh, in sampler2D bvh_nodes, in sampler2D bvh_indices, in int n_bvh_nodes, vec3 q) {
-
-    if (n_bvh_nodes == 0  || neighborhood_size <= 0 || neighborhood_size >= n_points) {
+// ----------------------------------------------------------------------------
+// meshSDF — struct version
+// ----------------------------------------------------------------------------
+float meshSDF(in sampler2D mesh, in sampler2D bvh_nodes, in sampler2D bvh_indices,
+              in int n_bvh_nodes, vec3 q) {
+    if (n_bvh_nodes == 0 || neighborhood_size <= 0 || neighborhood_size >= n_points) {
         float d = INFINITY;
         float gwn = 0.0;
         vec3 normal, cp;
-        for (int i=0; i < n_faces; i++) {
+        for (int i = 0; i < n_faces; i++) {
             vec3 v0 = fetch_texel(3*i, shape).xyz;
             vec3 v1 = fetch_texel(3*i+1, shape).xyz;
             vec3 v2 = fetch_texel(3*i+2, shape).xyz;
-            vec3 a = v0 - q;
-            vec3 b = v1 - q;
-            vec3 c = v2 - q;
-            float a_norm = length(a);
-            float b_norm = length(b);
-            float c_norm = length(c);
+            vec3 a = v0 - q, b = v1 - q, c = v2 - q;
+            float a_norm = length(a), b_norm = length(b), c_norm = length(c);
             gwn += 2.0 * atan(dot(a,cross(b,c)), a_norm*b_norm*c_norm + dot(a,b)*c_norm + dot(b,c)*a_norm + dot(c,a)*b_norm);
             vec3 n;
             vec3 m = closestPointOnTriangle(q, v0, v1, v2, n);
             float dist = length(q-m);
-            if (dist < d) {
-                d = dist;
-                normal = n;
-                cp = m;
-            }
+            if (dist < d) { d = dist; normal = n; cp = m; }
         }
-        // The threshold for GWN (inside/outside) depends on how the shape is oriented.
-        float s = (gwn > 2.0*PI) ? -1. : 1.; // if surface is positively oriented
-        //float s = (gwn < -2.0*PI) ? 1. : 1.; // if surface is negatively oriented
-        //float s = sign(dot(normal, q-cp)); simple pseudonormal test, brittle
+        float s = (gwn > 2.0*PI) ? -1. : 1.;
         return s * d;
     }
-
-    // BVH-accelerated version
-    // Get k-nearest triangles for pseudonormal sign computation
-    int tri_indices[max_neighborhood_size];
-    float tri_dists[max_neighborhood_size];
-    int count = bvhKNearestTriangles(mesh, bvh_nodes, bvh_indices, n_bvh_nodes, q, neighborhood_size, max_neighborhood_size, tri_indices, tri_dists);
     
-    if (count == 0) {
-        // No triangles found
-        return INFINITY;
-    }
+    KNNResult r;
+    bvhKNearestTriangles(mesh, bvh_nodes, bvh_indices, n_bvh_nodes, q,
+                         neighborhood_size, r);
+    if (r.count == 0) return INFINITY;
     
-    // Closest triangle gives us unsigned distance
-    float unsigned_dist = tri_dists[0];
-    
-    // Compute pseudonormal sign using k-nearest triangles
+    float unsigned_dist = r.dists[0];
     float sign_sum = 0.0;
-    for (int i = 0; i < count; i++) {
-        int tri_idx = tri_indices[i];
-        
-        vec3 v0 = fetch_texel(3 * tri_idx, mesh).xyz;
+    for (int i = 0; i < r.count; i++) {
+        int tri_idx = r.indices[i];
+        vec3 v0 = fetch_texel(3 * tri_idx,     mesh).xyz;
         vec3 v1 = fetch_texel(3 * tri_idx + 1, mesh).xyz;
         vec3 v2 = fetch_texel(3 * tri_idx + 2, mesh).xyz;
-        
-        // Compute triangle normal
-        vec3 e0 = v1 - v0;
-        vec3 e1 = v2 - v0;
+        vec3 e0 = v1 - v0, e1 = v2 - v0;
         vec3 tri_normal = normalize(cross(e0, e1));
-        
-        // Compute vector from triangle centroid to query
         vec3 c = (v0 + v1 + v2) / 3.0;
         vec3 to_query = q - c;
-        
-        // Pseudonormal test: if normal points toward query, we're outside
         sign_sum += sign(dot(tri_normal, to_query));
     }
-    
-    float avg_sign = sign_sum / float(count);
+    float avg_sign = sign_sum / float(r.count);
     float s = (avg_sign > 0.0) ? 1.0 : -1.0;
-    
     return s * unsigned_dist;
 }
 
-// Compute the color of the i-th torus.
 vec3 torusColor(int i) {
-    float incr = (1.0+sqrt(5.0))/20.; // pick an increment that doesn't go into 1 evenly, so all tori are a different color 
+    float incr = (1.0+sqrt(5.0))/20.;
     vec3 hsv = vec3(0., 0.5, 1.);
     hsv.x = mod(i*incr, 1.);
     return hsv2rgb(hsv);
 }
 
-bool intersectTorus(in sampler2D texture, in int idx, in vec3 ro, in vec3 rd, in float tmin, in float tmax, in int maxSteps, in float epsilon, out float t, out vec3 torusPosition, out vec3 torusNormal) {
+bool intersectTorus(in sampler2D texture, in int idx, in vec3 ro, in vec3 rd,
+                    in float tmin, in float tmax, in int maxSteps, in float epsilon,
+                    out float t, out vec3 torusPosition, out vec3 torusNormal) {
     vec3 center, axis;
     float R, r;
     get_torus_params(idx, texture, center, axis, R, r);
-    // sphere-trace
     t = tmin;
     for (int iters=0; iters < maxSteps && t < tmax; iters++) {
         vec3 pos = ro + t * rd;
         vec3 rVec = pos - center;
         vec2 u = vec2(length(cross(rVec, axis)) - R, dot(rVec, axis));
-        float dist = abs(length(u) - abs(r)); // unsigned distance to torus
+        float dist = abs(length(u) - abs(r));
         if (dist < epsilon) {
             torusPosition = pos;
-            vec3 centerline = center + R*normalize(rVec - dot(rVec, axis) * axis); // position along major circle
+            vec3 centerline = center + R*normalize(rVec - dot(rVec, axis) * axis);
             torusNormal = pos - centerline;
             torusNormal /= length(torusNormal);
             return true;
         }
         t += dist;
-     }
-     return false;
+    }
+    return false;
 }
 
-/*
- * Return the index of the intersected torus.
- */
-int intersecttori(in sampler2D texture, in vec3 ro, in vec3 rd, in float tmin, in float tmax, in int maxSteps, in float epsilon, out float t, out vec3 torusPosition, out vec3 torusNormal) {
+int intersecttori(in sampler2D texture, in vec3 ro, in vec3 rd, in float tmin, in float tmax,
+                  in int maxSteps, in float epsilon,
+                  out float t, out vec3 torusPosition, out vec3 torusNormal) {
     int idx = -1;
     float tMax = tmax;
     for (int i=0; i < n_points; i++) {
-        if (intersectTorus(texture, i, ro, rd, tmin, tMax, maxSteps, epsilon, t, torusPosition, torusNormal)) {
+        if (intersectTorus(texture, i, ro, rd, tmin, tMax, maxSteps, epsilon,
+                           t, torusPosition, torusNormal)) {
             idx = i;
             tMax = t;
         }
     }
     return idx;
 }
-
-
 """
 
 # Shading and scene intersection stuff
@@ -1703,40 +1315,30 @@ COMMON_TEMPLATE = """
             }}
             return estimate/normalization;
         }}
-        
+
         // BVH-accelerated version
-        int tri_indices[max_neighborhood_size];
-        float tri_dists[max_neighborhood_size];
-        int count = bvhKNearestTriangles(mesh, bvh_nodes, bvh_indices, n_bvh_nodes, q, neighborhood_size, max_neighborhood_size, tri_indices, tri_dists);
+        KNNResult tri_result;
+        bvhKNearestTriangles(mesh, bvh_nodes, bvh_indices, n_bvh_nodes, q,
+                             neighborhood_size, tri_result);
         
-        if (count == 0) {{
-            return vec3(0.0);
-        }}
+        if (tri_result.count == 0) return vec3(0.0);
         
-        vec3 estimate = vec3(0.0, 0.0, 0.0);
+        vec3 estimate = vec3(0.0);
         float normalization = 0.0;
-        
-        for (int i = 0; i < count; i++) {{
-            int tri_idx = tri_indices[i];
-            
-            vec3 v0 = fetch_texel(3 * tri_idx, mesh).xyz;
+        for (int i = 0; i < tri_result.count; i++) {{
+            int tri_idx = tri_result.indices[i];
+            vec3 v0 = fetch_texel(3 * tri_idx,     mesh).xyz;
             vec3 v1 = fetch_texel(3 * tri_idx + 1, mesh).xyz;
             vec3 v2 = fetch_texel(3 * tri_idx + 2, mesh).xyz;
-            
-            vec3 e0 = v1 - v0;
-            vec3 e1 = v2 - v0;
-            vec3 n = 0.5 * cross(e0, e1); // Area-weighted normal
-            
-            // Centroid for single-point quadrature
+            vec3 e0 = v1 - v0, e1 = v2 - v0;
+            vec3 n = 0.5 * cross(e0, e1);
             vec3 c = (v0 + v1 + v2) / 3.0;
             float d = length(q - c);
             float area = length(n);
             float weight = exp(-lambda * (d - shift));
-            
             estimate += n * weight;
             normalization += area * weight;
         }}
-        
         return estimate / normalization;
     }}
 
@@ -2365,7 +1967,7 @@ void main() {{
 # Equivalent to ShaderToy's mainImage() function
 # All braces are escaped (via double braces), because this string is used for string formatting in demo.py
 MAIN_FRAGMENT_SHADER_TEMPLATE = """
-    #version 150 core
+    #version 330 core
 
     {COMMON_DYNAMIC}
 

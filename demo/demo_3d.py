@@ -7,6 +7,9 @@ import time
 import glob
 from enum import Enum
 
+import os
+os.environ['LANG']='en_US'
+
 import pyglet
 from pyglet.graphics.shader import Shader, ShaderProgram
 from pyglet.gl import *
@@ -316,7 +319,7 @@ class ShaderWindow(pyglet.window.Window):
 		self.use_point_areas = True
 		self.lambda_scale = 1.0
 		self.max_exp_arg = 64.0
-		self.max_neighborhood_size = 128
+		self.max_neighborhood_size = 40
 		self.neighborhood_size = -1
 		self.neighborhood_radius = 0.0
 		self.epsilon = 0.5
