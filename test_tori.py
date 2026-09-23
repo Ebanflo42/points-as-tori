@@ -9,13 +9,15 @@ import matplotlib.pyplot as plt
 from typing import *
 from scipy.spatial import KDTree
 
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
 def raymarch(pat_sdf: pat.PointsAsTori) -> np.ndarray:
-    ro = np.array([0, 0, -2.5])[np.newaxis]
-    xy = np.stack(np.meshgrid(np.arange(-320, 320), np.arange(-240, 240), indexing='xy'), axis=-1).reshape((-1, 2)).astype(np.float64)
-    xy /= 480
-    xyz = np.concatenate((xy, -1.5*np.ones((480*640, 1))), axis=-1)
+    ro = np.array([0, 0, -5])[np.newaxis]
+    xy = np.stack(np.meshgrid(np.arange(-320, 320), np.arange(-240, 240), indexing='ij'), axis=-1).reshape((-1, 2)).astype(np.float64)
+    xy /= 240
+    xyz = np.concatenate((xy, -4*np.ones((480*640, 1))), axis=-1)
     rd = xyz - ro
-    rd /= np.linalg.norm(rd)
+    rd /= np.linalg.norm(rd, axis=-1, keepdims=True)
     t = np.zeros((rd.shape[0], 1))
     d = np.zeros_like(t)
 
@@ -23,17 +25,46 @@ def raymarch(pat_sdf: pat.PointsAsTori) -> np.ndarray:
         p = ro + t*rd
         #print(p.dtype, p.shape, t.shape, d.shape)
         d = pat_sdf.signed_distance(p)[:, np.newaxis]
+        #print(d.min(), d.max(), t.min(), t.max())
         #print(p.dtype, p.shape, t.shape, d.shape)
-        t += d
+        t += np.clip(d, 0, 1)
 
-    hit = d < 1e-3
+    hit = np.logical_and(d < 1e-3, t < 1e2)
     normals = pat_sdf.sdf_gradient(p)
+    normals /= np.linalg.norm(normals, axis=-1, keepdims=True)
 
     img = np.where(hit, 0.5 + 0.5*normals, np.zeros_like(normals))
     return img.reshape((640, 480, 3))
 
 
-def process_example(thing):
+def process_example(name: str, shape: pat.shape_3d.TriangleMesh):
+
+    # construct points as tori, using both nn and linear least squares
+    points = shape.vertices
+    normals = shape.vertex_normals
+    pat_neural = pat.PointsAsTori(points, normals, chunk_size=5000)
+    pat_neural.save_tori(f"tori/{name}/neural/tori.pkl")
+    pat_linear = pat.PointsAsTori(points, normals, chunk_size=5000, use_linear_least_squares=True)
+    pat_linear.save_tori(f"tori/{name}/linear/tori.pkl")
+
+    print(f"Raymarching {name} . . .")
+    neural_raymarch = raymarch(pat_neural)
+    linear_raymarch = raymarch(pat_linear)
+
+    fig = plt.figure()
+    ax = fig.add_subplot()
+    ax.imshow(neural_raymarch)
+    plt.savefig(f"tori/{name}/neural/raymarch.png")
+    plt.close('all')
+
+    fig = plt.figure()
+    ax = fig.add_subplot()
+    ax.imshow(linear_raymarch)
+    plt.savefig(f"tori/{name}/linear/raymarch.png")
+    plt.close('all')
+
+
+def preprocess_thingi(thing) -> Tuple[str, pat.shape_3d.TriangleMesh]:
 
     # check directories exist
     name = thing["name"].replace(' ', '')
@@ -67,40 +98,55 @@ def process_example(thing):
             shape = pat.shape_3d.TriangleMesh(vertices, faces)
     except:
         print(f"Error {thing['file_path']}")
-        return
+        return None
 
-    # construct points as tori, using both nn and linear least squares
-    points = shape.vertices
-    normals = shape.vertex_normals
-    pat_neural = pat.PointsAsTori(points, normals)
-    pat_neural.save_tori(f"tori/{name}/neural/tori.pkl")
-    pat_linear = pat.PointsAsTori(points, normals, use_linear_least_squares=True)
+    return (name, shape)
 
-    print(f"Raymarching {name} . . .")
-    neural_raymarch = raymarch(pat_neural)
-    linear_raymarch = raymarch(pat_linear)
 
-    fig = plt.figure()
-    ax = fig.add_subplot()
-    ax.imshow(neural_raymarch)
-    plt.savefig(f"tori/{name}/neural/raymarch.png")
-    plt.close('all')
+def torus_mesh(major_r, minor_r, major_seg=256, minor_seg=256):
+    u = np.linspace(0, 2*np.pi, major_seg, endpoint=False)
+    v = np.linspace(0, 2*np.pi, minor_seg, endpoint=False)
+    U, V = np.meshgrid(u, v, indexing='ij')
 
-    fig = plt.figure()
-    ax = fig.add_subplot()
-    ax.imshow(linear_raymarch)
-    plt.savefig(f"tori/{name}/linear/raymarch.png")
-    plt.close('all')
+    x = (major_r + minor_r*np.cos(V)) * np.cos(U)
+    y = (major_r + minor_r*np.cos(V)) * np.sin(U)
+    z = minor_r * np.sin(V)
 
+    vertices = np.stack([x, y, z], axis=-1).reshape(-1, 3).astype(np.float64)
+
+    i = np.arange(major_seg)[:, None]
+    j = np.arange(minor_seg)[None, :]
+    a = (i * minor_seg + j) % (major_seg * minor_seg)
+    b = ((i + 1) % major_seg * minor_seg + j) % (major_seg * minor_seg)
+    c = ((i + 1) % major_seg * minor_seg + (j + 1) % minor_seg) % (major_seg * minor_seg)
+    d = (i * minor_seg + (j + 1) % minor_seg) % (major_seg * minor_seg)
+
+    a, b, c, d = a.ravel(), b.ravel(), c.ravel(), d.ravel()
+    faces = np.concatenate([
+        np.stack([a, b, c], axis=-1),
+        np.stack([a, c, d], axis=-1),
+    ], axis=0).astype(np.int64)
+
+    return vertices, faces
+
+
+def sanity_check():
+    mesh = torus_mesh(2, 0.5)
+    shape = pat.shape_3d.TriangleMesh(mesh[0], mesh[1])
+    process_example("torus", shape)
 
 
 if __name__ == "__main__":
 
     os.makedirs("tori", exist_ok=True)
 
+    """
     thingi10k.init()
-
     for entry in thingi10k.dataset(
             closed=True, manifold=True, oriented=True, self_intersecting=False, solid=False, num_components=1
         ):
-        process_example(entry)
+        preprocessed = preprocess_thingi(entry)
+        if preprocessed is not None:
+            process_example(preprocessed[0], preprocessed[1])
+    """
+    sanity_check()

@@ -1152,12 +1152,12 @@ class FundamentalFormPredictor(nnx.Module):
 			# Extract chunk
 			chunk_indices = indices[start_idx:end_idx]  # (chunk_size, k)
 			chunk_points = points[chunk_indices]  # (chunk_size, k, 3)
+			chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
 
 			if use_linear_least_squares:
-				chunk_coeffs = jit_least_squares(chunk_points)
+				chunk_coeffs = jit_least_squares(chunk_points, chunk_normals)
 
 			else:
-				chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
 				# Forward pass for this chunk
 				chunk_coeffs = self(chunk_points, chunk_normals)
 
