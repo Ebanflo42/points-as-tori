@@ -12,10 +12,10 @@ from scipy.spatial import KDTree
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 def raymarch(pat_sdf: pat.PointsAsTori) -> np.ndarray:
-    ro = np.array([0, 0, -5])[np.newaxis]
-    xy = np.stack(np.meshgrid(np.arange(-320, 320), np.arange(-240, 240), indexing='ij'), axis=-1).reshape((-1, 2)).astype(np.float64)
-    xy /= 240
-    xyz = np.concatenate((xy, -4*np.ones((480*640, 1))), axis=-1)
+    ro = np.array([0, -2, 0])[np.newaxis]
+    xz = np.stack(np.meshgrid(np.arange(-500, 500), np.arange(-500, 500), indexing='ij'), axis=-1).reshape((-1, 2)).astype(np.float64)
+    xz /= 500
+    xyz = np.stack((xz[:, 0], -np.ones((1000**2,)), xz[:, 1]), axis=-1)
     rd = xyz - ro
     rd /= np.linalg.norm(rd, axis=-1, keepdims=True)
     t = np.zeros((rd.shape[0], 1))
@@ -30,11 +30,11 @@ def raymarch(pat_sdf: pat.PointsAsTori) -> np.ndarray:
         t += np.clip(d, 0, 1)
 
     hit = np.logical_and(d < 1e-3, t < 1e2)
-    normals = pat_sdf.sdf_gradient(p)
+    normals = pat_sdf.sdf_gradient_numeric(p)
     normals /= np.linalg.norm(normals, axis=-1, keepdims=True)
 
     img = np.where(hit, 0.5 + 0.5*normals, np.zeros_like(normals))
-    return img.reshape((640, 480, 3))
+    return img.reshape((1000, 1000, 3))
 
 
 def process_example(name: str, shape: pat.shape_3d.TriangleMesh):
@@ -131,7 +131,7 @@ def torus_mesh(major_r, minor_r, major_seg=256, minor_seg=256):
 
 
 def sanity_check():
-    mesh = torus_mesh(2, 0.5)
+    mesh = torus_mesh(1, 0.25)
     shape = pat.shape_3d.TriangleMesh(mesh[0], mesh[1])
     process_example("torus", shape)
 
@@ -140,7 +140,7 @@ if __name__ == "__main__":
 
     os.makedirs("tori", exist_ok=True)
 
-    """
+    #"""
     thingi10k.init()
     for entry in thingi10k.dataset(
             closed=True, manifold=True, oriented=True, self_intersecting=False, solid=False, num_components=1
@@ -148,5 +148,5 @@ if __name__ == "__main__":
         preprocessed = preprocess_thingi(entry)
         if preprocessed is not None:
             process_example(preprocessed[0], preprocessed[1])
-    """
-    sanity_check()
+    #"""
+    #sanity_check()

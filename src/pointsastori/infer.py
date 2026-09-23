@@ -91,6 +91,23 @@ class PointsAsTori:
 		self._tdf.set_k_evaluation(K_NEIGHBORS_ACCELERATION if accelerate else -1)
 		return self._tdf.evaluate_gradient(queries)
 
+	def sdf_gradient_numeric(self, queries: np.ndarray, accelerate: bool = True) -> np.ndarray:
+		"""
+		Evaluate signed distance at the given query points.
+
+		Args:
+			queries: query locations, shape (n_queries, 3)
+
+		Returns:
+			(n_queries, ) array of distances
+		"""
+		self._tdf.set_k_evaluation(K_NEIGHBORS_ACCELERATION if accelerate else -1)
+		d = self._tdf.evaluate_distance(queries)
+		d1 = self._tdf.evaluate_distance(queries + np.array([[1e-4, 0, 0]]))
+		d2 = self._tdf.evaluate_distance(queries + np.array([[0, 1e-4, 0]]))
+		d3 = self._tdf.evaluate_distance(queries + np.array([[0, 0, 1e-4]]))
+		return 1e4*(np.stack((d1, d2, d3), axis=-1) - d[:, np.newaxis])
+
 	def signed_distance_and_gradient(
 		self, queries: np.ndarray, accelerate: bool = True
 	) -> Tuple[np.ndarray, np.ndarray]:

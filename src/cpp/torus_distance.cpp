@@ -292,6 +292,8 @@ double TorusDistanceField::evaluate_distance_single(const Eigen::Vector3d& q, co
         }
         Eigen::Vector3d center = centers.col(i);
         double g_z = torus_signed_distance(q, center, axes.col(i), major_radii(i), minor_radii(i));
+        double d_sphere = (q - p_i).norm() - 0.1;
+        g_z = max(d_sphere, g_z);
         g += weight * g_z;
         normalization += weight;
     }
