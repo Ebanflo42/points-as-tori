@@ -1,12 +1,13 @@
 import matplotlib.pyplot as plt
 
+from jax.sharding import PartitionSpec, NamedSharding
+from jax.experimental import mesh_utils
+
 from pointsastori.shape_3d import *
 from pointsastori.network import *
 from mesh_data import *
 from mesh_sampling_jax import *
 from train import load_mesh_training_data
-
-
 
 @jit
 def SDF_loss_with_uncertainty(
@@ -161,7 +162,7 @@ def FundamentalFormPredictorTuner(
 
     # Learning rate schedule
     schedule = optax.warmup_cosine_decay_schedule(
-        init_value=learning_rate * 0.01,  # Start from 0
+        init_value=learning_rate * 0.001,  # Start from 0
         peak_value=learning_rate,  # Warmup to this
         warmup_steps=warmup_steps,  # Linear warmup
         decay_steps=total_steps,  # Cosine decay over this many steps
@@ -242,6 +243,7 @@ def TuneFundamentalFormPredictor(
     warmup_steps,
     n_epochs_to_save,
     n_shapes_to_save,
+    drop_last_layer,
     load_model_path=None,
     final_save_filepath=None,
 ):
@@ -277,6 +279,34 @@ def TuneFundamentalFormPredictor(
     # Learning parameters
     dropout_rate = 0.0
     weight_decay = 0.0
+
+    # Load mesh training data from multiple files.
+    all_training_data = []
+    n_total_points = 0
+    t0 = time.time()
+    k_neighbors = None
+    for training_data_filename in training_data_filenames:
+        if not os.path.exists(training_data_filename):
+            raise ValueError(f"The path '{training_data_filename}' does not exist")
+
+        print(f"Loading training data from '{training_data_filename}'...")
+
+        data = load_mesh_training_data(training_data_filename)
+
+        (all_positions, all_normals, all_neighbors, all_masks, all_mesh_vertices, all_mesh_faces, all_face_masks) = data
+        n_total_points += len(all_positions)
+
+        k_neighbors = all_neighbors.shape[2]
+        n_shapes = len(all_positions)
+        max_points = all_positions.shape[1]
+        print(f'  Loaded {n_shapes} shapes with max {max_points} points each')
+        print(f'  k_neighbors: {k_neighbors}')
+
+        all_training_data.append(data)
+
+    t1 = time.time()
+    print(f'Load data: {t1 - t0:.6f} s')
+
     total_steps = 1e8
 
     model, optimizer, train_step = FundamentalFormPredictorTuner(
@@ -297,48 +327,8 @@ def TuneFundamentalFormPredictor(
 
     # Load pretrained model if specified
     if load_model_path is not None:
-        model = FundamentalFormPredictorWithUncertainty.load_saved_model(load_model_path, drop_last_layer=True)
-        """
-        print(f'Loading pretrained model from {load_model_path}')
-        with open(load_model_path, 'rb') as f:
-            saved_data = pickle.load(f)
+        model = FundamentalFormPredictorWithUncertainty.load_saved_model(load_model_path, drop_last_layer=drop_last_layer)
 
-        # Verify architecture matches
-        assert saved_data['embed_dim'] == embed_dim, 'embed_dim mismatch'
-        assert saved_data['n_freq'] == n_freq, 'n_freq mismatch'
-        assert saved_data['n_heads'] == n_heads + 1, 'n_heads mismatch'
-        assert saved_data['n_layers'] == n_layers, 'n_layers mismatch'
-        assert saved_data['mlp_dim'] == mlp_dim, 'mlp_dim mismatch'
-
-        # Load parameters into model
-        nnx.update(model, saved_data['params'])
-        print(f'Successfully loaded pretrained weights from {load_model_path}')
-        """
-
-    # Load mesh training data from multiple files.
-    all_training_data = []
-    t0 = time.time()
-    k_neighbors = None
-    for training_data_filename in training_data_filenames:
-        if not os.path.exists(training_data_filename):
-            raise ValueError(f"The path '{training_data_filename}' does not exist")
-
-        print(f"Loading training data from '{training_data_filename}'...")
-
-        data = load_mesh_training_data(training_data_filename)
-
-        (all_positions, all_normals, all_neighbors, all_masks, all_mesh_vertices, all_mesh_faces, all_face_masks) = data
-
-        k_neighbors = all_neighbors.shape[2]
-        n_shapes = len(all_positions)
-        max_points = all_positions.shape[1]
-        print(f'  Loaded {n_shapes} shapes with max {max_points} points each')
-        print(f'  k_neighbors: {k_neighbors}')
-
-        all_training_data.append(data)
-
-    t1 = time.time()
-    print(f'Load data: {t1 - t0:.6f} s')
 
     # Create combined list of (dataset_idx, shape_idx) for all shapes (across possibly multiple datasets)
     all_shape_indices = []
@@ -686,6 +676,22 @@ def train():
     model_name_pretrained = "EbenTest5"
     model_name_tuned = "EbenTune1"
 
+    # Phase 0: nicely sampled blobs
+    training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
+    TuneFundamentalFormPredictor(
+        model_name_tuned,
+        training_data_filenames,
+        num_epochs=24,
+        learning_rate=1e-6,
+        warmup_steps=1e3,
+        batch_size=1024,
+        n_epochs_to_save=1,
+        n_shapes_to_save=1,
+        load_model_path=f'models/{model_name_pretrained}_pretrained.pkl',
+        final_save_filepath=f'{model_name_tuned}_phase0',
+        drop_last_layer=True
+    )
+
     # Phase 3: nicely sampled blobs and even more ABC meshes
     blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
     ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
@@ -693,16 +699,17 @@ def train():
     TuneFundamentalFormPredictor(
         model_name_tuned,
         training_data_filenames,
-        num_epochs=10,
-        learning_rate=1e-6,
-        warmup_steps=1e3,
+        num_epochs=15,
+        learning_rate=1e-7,
+        warmup_steps=1e4,
         batch_size=1024,
         n_epochs_to_save=1,
         n_shapes_to_save=100,
-        load_model_path=f'models/{model_name_pretrained}_phase3.pkl',
+        load_model_path=f'{model_name_tuned}_phase0',
         final_save_filepath=f'{model_name_tuned}_phase3',
     )
 
+    """
     # Phase 4: everything from before, plus unevenly sampled data possibly with small gaps from a simulated scanning process
     blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
     ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
@@ -720,7 +727,9 @@ def train():
         n_shapes_to_save=100,
         load_model_path=f'models/{model_name_tuned}_phase3.pkl',
         final_save_filepath=f'{model_name_tuned}_phase4',
+        drop_last_layer=False
     )
+    """
 
 
 if __name__ == '__main__':
