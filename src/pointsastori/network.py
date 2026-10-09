@@ -975,7 +975,9 @@ class InputFeatures(nnx.Module):
 
 		# A linear projection simply to match transformer dimension
 		self.mlp = nnx.Sequential(
-			nnx.Linear(input_dim, output_dim, rngs=rngs),
+			nnx.Linear(input_dim, 2*output_dim, rngs=rngs),
+			nnx.relu,
+			nnx.Linear(2*output_dim, output_dim, rngs=rngs),
 			nnx.LayerNorm(output_dim, rngs=rngs),  # LayerNorm seems to really help here
 		)
 
@@ -1201,6 +1203,214 @@ class FundamentalFormPredictor(nnx.Module):
 
 		# Load saved parameters into the model
 		nnx.update(loaded_model, saved_data['params'])
+
+		# Put in eval mode
+		nnx.eval_mode(loaded_model)
+
+		print(f'Loaded FundamentalFormPredictor model:')
+		print(f'  embed_dim: {saved_data["embed_dim"]}')
+		print(f'  n_freq: {n_freq}')
+		print(f'  n_heads: {saved_data["n_heads"]}')
+		print(f'  n_layers: {saved_data["n_layers"]}')
+		print(f'  mlp_dim: {saved_data["mlp_dim"]}')
+		print(f'  dropout_rate: {saved_data["dropout_rate"]}')
+
+		return loaded_model, saved_data['k_neighbors']
+
+
+class FundamentalFormPredictorWithUncertainty(nnx.Module):
+	def __init__(
+		self,
+		embed_dim: int = 128,
+		n_freq: int = 0,
+		n_layers: int = 4,
+		n_heads: int = 4,
+		mlp_dim: int = 256,
+		dropout_rate: float = 0.0,
+		*,
+		rngs: nnx.Rngs,
+	):
+		"""
+		Args: Parameters for each TransformerBlock.
+			n_layers: Number of TransformerBlocks.
+		"""
+
+		self.input_encoder = InputFeatures(embed_dim, n_freq=n_freq, rngs=rngs)
+
+		self.blocks = nnx.List(
+			[TransformerBlock(embed_dim, n_heads, mlp_dim, dropout_rate, rngs=rngs) for _ in range(n_layers)]
+		)
+
+		self.final_norm = nnx.LayerNorm(embed_dim, rngs=rngs)
+
+		# Projection
+		# (a00, a01, a10, a11, a02, a20, uncertainty)
+		self.mlp = nnx.Sequential(
+			nnx.Linear(
+				embed_dim,
+				7,
+				kernel_init=nnx.initializers.zeros_init(),
+				# bias_init=nnx.initializers.ones_init(),
+				bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 0.0])),
+				rngs=rngs,
+			),
+		)
+
+	@nnx.jit
+	def __call__(self, positions: jax.Array, normals: jax.Array) -> jax.Array:
+		"""
+		Args:
+			positions, normals: [batch, k, 3] representing a neighborhood of size k; the first point (index 0) is the center
+
+		Returns:
+			coefficients: [batch, 6] (a00, a01, a10, a11, a02, a20)
+		"""
+		batch_size, k, d = positions.shape
+
+		# input_features: [batch, k, embed_dim]
+		# scale: [batch, ]
+		input_features, scale = self.input_encoder(positions, normals)
+		x = input_features
+
+		# Apply transformer blocks
+		for block in self.blocks:
+			x = block(x)
+
+		x = self.final_norm(x)  # [batch, k, embed_dim]
+
+		# Extract center point
+		x = x[:, 0, :]  # [batch, embed_dim]
+
+		# Predict form coefficients
+		coeffs = self.mlp(x)  # [batch, 7]
+
+		# Scale back to original space
+		coeffs = jnp.stack(
+			[
+				coeffs[:, 0] * scale,  # a00
+				coeffs[:, 1],  # a01
+				coeffs[:, 2],  # a10
+				coeffs[:, 3] / scale,  # a11
+				coeffs[:, 4] / scale,  # a02
+				coeffs[:, 5] / scale,  # a20
+				coeffs[:, 6] * scale   # uncertainty
+			],
+			axis=-1,
+		)
+
+		return coeffs
+
+	def precompute_coefficients(self, points, normals, k_neighbors, outliers=np.array([])):
+		nnx.eval_mode(self)
+		# Generate neighborhoods
+		indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
+
+		# Run forward evaluation.
+		predicted_coefficients = self(points[indices], normals[indices])  # (|P|, 7)
+
+		return predicted_coefficients
+
+	def precompute_coefficients_in_chunks(self, points, normals, k_neighbors, chunk_size=50000, outliers=np.array([]), use_linear_least_squares: bool = False):
+		"""
+		Process in chunks to avoid GPU memory issues
+		"""
+		nnx.eval_mode(self)
+
+		n_points = points.shape[0]
+		print(f'Processing {n_points} points in chunks of {chunk_size}...')
+
+		# Generate patches
+		t0 = time.time()
+		indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
+		t1 = time.time()
+		print(f'  get_neighbors: {t1 - t0:.2f}s')
+
+		# Allocate output array
+		all_coefficients = []
+
+		# Process in chunks
+		n_chunks = (n_points + chunk_size - 1) // chunk_size
+		t0 = time.time()
+
+		if use_linear_least_squares:
+			jit_least_squares = jax.jit(least_squares_coefficients)
+
+		for chunk_idx in range(n_chunks):
+			start_idx = chunk_idx * chunk_size
+			end_idx = min(start_idx + chunk_size, n_points)
+
+			# Extract chunk
+			chunk_indices = indices[start_idx:end_idx]  # (chunk_size, k)
+			chunk_points = points[chunk_indices]  # (chunk_size, k, 3)
+			chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
+
+			if use_linear_least_squares:
+				chunk_coeffs = jit_least_squares(chunk_points, chunk_normals)
+
+			else:
+				# Forward pass for this chunk
+				chunk_coeffs = self(chunk_points, chunk_normals)
+
+			# Wait for GPU to finish and transfer to CPU
+			chunk_coeffs_cpu = np.array(chunk_coeffs.block_until_ready())
+			all_coefficients.append(chunk_coeffs_cpu)
+
+			# Clear JAX cache for this chunk
+			del chunk_coeffs
+
+			if (chunk_idx + 1) % 10 == 0:
+				print(f'	{chunk_idx + 1}/{n_chunks} chunks processed')
+
+		t1 = time.time()
+		print(f'  Coefficient prediction (chunked): {t1 - t0:.2f}s')
+
+		# Concatenate all chunks
+		predicted_coefficients = np.concatenate(all_coefficients, axis=0)
+
+		return predicted_coefficients
+
+	def _drop_last_layer(self):
+		self.blocks = self.blocks[:-1]
+		self.n_layers -= 1
+
+	@staticmethod
+	def load_saved_model(filepath: str, drop_last_layer: bool):
+		"""
+		Given the filepath where weights are saved, return the model and its parameters.
+		"""
+		with open(filepath, 'rb') as f:
+			saved_data = pickle.load(f)
+
+		n_freq = saved_data['n_freq'] if 'n_freq' in saved_data else 0
+
+		loaded_model = FundamentalFormPredictor(
+			embed_dim=saved_data['embed_dim'],
+			n_freq=n_freq,
+			n_heads=saved_data['n_heads'],
+			n_layers=saved_data['n_layers'],
+			mlp_dim=saved_data['mlp_dim'],
+			dropout_rate=saved_data['dropout_rate'],  # not used in eval mode
+			rngs=nnx.Rngs(0),  # not used in eval mode
+		)
+
+		# Load saved parameters into the model
+		nnx.update(loaded_model, saved_data['params'])
+
+		# Projection
+		# (a00, a01, a10, a11, a02, a20, uncertainty)
+		loaded_model.mlp = nnx.Sequential(
+			nnx.Linear(
+				saved_data['embed_dim'],
+				7,
+				kernel_init=nnx.initializers.zeros_init(),
+				# bias_init=nnx.initializers.ones_init(),
+				bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 0.0])),
+				rngs=nnx.Rngs(0),
+			),
+		)
+
+		if drop_last_layer:
+			loaded_model._drop_last_layer()
 
 		# Put in eval mode
 		nnx.eval_mode(loaded_model)
