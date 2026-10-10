@@ -111,7 +111,7 @@ def SDF_loss(
         lambda: 0.0,
     )
 
-    loss = distance_loss + 0.2*eikonality_loss
+    loss = distance_loss + eikonality_loss
 
     # Return individual components for logging
     loss_dict = {
@@ -168,7 +168,6 @@ def validation_loss(
 
 
 def FundamentalFormPredictorTrainer(
-    model_name: str,
     embed_dim=128,
     n_freq=4,
     n_layers=4,
@@ -187,7 +186,6 @@ def FundamentalFormPredictorTrainer(
 
     Returns: (model, optimizer, train_step) where train_step() is a function that trains the model for a single step.
     """
-
     model = FundamentalFormPredictor(
         embed_dim=embed_dim,
         n_freq=n_freq,
@@ -270,7 +268,6 @@ def FundamentalFormPredictorTrainer(
 
 
 def TrainFundamentalFormPredictor(
-    model_name: str,
     training_data_filenames,
     num_epochs,
     learning_rate,
@@ -299,14 +296,14 @@ def TrainFundamentalFormPredictor(
     # The current (naive) versions of these functions are called on all points at once (usually in a vectorized manner).
 
     # Architecture parameters
-    embed_dim = 256
+    embed_dim = 128
     n_freq = 0
-    n_layers = 4
-    n_heads = 16
-    mlp_dim = embed_dim * 2
+    n_layers = 8
+    n_heads = 8
+    mlp_dim = embed_dim * 4
 
     # Sampling params
-    n_queries_per_neighborhood = 120
+    n_queries_per_neighborhood = 60
     narrow_band_offset = 0.2
     bbox_extension = 1.0
 
@@ -316,7 +313,6 @@ def TrainFundamentalFormPredictor(
     total_steps = 1e8
 
     model, optimizer, train_step = FundamentalFormPredictorTrainer(
-        model_name,
         embed_dim=embed_dim,
         n_freq=n_freq,
         n_layers=n_layers,
@@ -426,8 +422,8 @@ def TrainFundamentalFormPredictor(
             'dropout_rate': dropout_rate,
         }
 
-        this_model_name = f'{model_name}_{epoch}' if save_filepath is None else save_filepath
-        filepath = MODELS_DIR + this_model_name + '.pkl'
+        model_name = f'FundamentalFormPredictor_{epoch}' if save_filepath is None else save_filepath
+        filepath = MODELS_DIR + model_name + '.pkl'
         with open(filepath, 'wb') as f:
             pickle.dump(saved_data, f)
 
@@ -708,27 +704,25 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = 'datasets/nice'
-    model_name = "EbenTest5"
 
+    """
     # Pretraining
     training_data_filenames = ['datasets/pretraining_blob.npz']
     TrainFundamentalFormPredictor(
-        model_name,
         training_data_filenames,
         num_epochs=64,
         learning_rate=1e-3,
         warmup_steps=0,
-        batch_size=1024,
-        n_epochs_to_save=16,
+        batch_size=32,
+        n_epochs_to_save=1,
         n_shapes_to_save=1,
         load_model_path=None,
-        final_save_filepath=f'{model_name}_pretrained',
+        final_save_filepath='FundamentalFormPredictor_pretrained',
     )
 
     # Phase 0: nicely sampled blobs
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
     TrainFundamentalFormPredictor(
-        model_name,
         training_data_filenames,
         num_epochs=24,
         learning_rate=1e-5,
@@ -736,8 +730,8 @@ def train():
         batch_size=1024,
         n_epochs_to_save=1,
         n_shapes_to_save=1,
-        load_model_path=f'models/{model_name}_pretrained.pkl',
-        final_save_filepath=f'{model_name}_phase0',
+        load_model_path='models/FundamentalFormPredictor_pretrained.pkl',
+        final_save_filepath='FundamentalFormPredictor_phase0',
     )
 
     # Phase 1: nicely sampled blobs and ABC meshes
@@ -746,7 +740,6 @@ def train():
     lists = [blob_filenames, ABC_filenames]
     training_data_filenames = [val for tup in zip(*lists) for val in tup]  # interleave lists
     TrainFundamentalFormPredictor(
-        model_name,
         training_data_filenames,
         num_epochs=8,
         learning_rate=1e-5,
@@ -754,8 +747,8 @@ def train():
         batch_size=1024,
         n_epochs_to_save=1,
         n_shapes_to_save=100,
-        load_model_path=f'models/{model_name}_phase0.pkl',
-        final_save_filepath=f'{model_name}_phase1',
+        load_model_path='models/FundamentalFormPredictor_phase0.pkl',
+        final_save_filepath='FundamentalFormPredictor_phase1',
     )
 
     # Phase 2: nicely sampled blobs and more ABC meshes
@@ -764,7 +757,6 @@ def train():
     ABC2_filenames = glob.glob(os.path.join(dataset_dir, 'ABC2_train_mode0_*.npz'))
     training_data_filenames = blob_filenames + ABC17_filenames + ABC2_filenames
     TrainFundamentalFormPredictor(
-        model_name,
         training_data_filenames,
         num_epochs=8,
         learning_rate=1e-6,
@@ -772,8 +764,8 @@ def train():
         batch_size=1024,
         n_epochs_to_save=1,
         n_shapes_to_save=100,
-        load_model_path=f'models/{model_name}_phase1.pkl',
-        final_save_filepath=f'{model_name}_phase2',
+        load_model_path='models/FundamentalFormPredictor_phase1.pkl',
+        final_save_filepath='FundamentalFormPredictor_phase2',
     )
 
     # Phase 3: nicely sampled blobs and even more ABC meshes
@@ -781,7 +773,6 @@ def train():
     ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
     training_data_filenames = blob_filenames + ABC_filenames
     TrainFundamentalFormPredictor(
-        model_name,
         training_data_filenames,
         num_epochs=5,
         learning_rate=1e-6,
@@ -789,10 +780,10 @@ def train():
         batch_size=1024,
         n_epochs_to_save=1,
         n_shapes_to_save=100,
-        load_model_path=f'models/{model_name}_phase2.pkl',
-        final_save_filepath=f'{model_name}_phase3',
+        load_model_path='models/FundamentalFormPredictor_phase2.pkl',
+        final_save_filepath='FundamentalFormPredictor_phase3',
     )
-
+    """
     # Phase 4: everything from before, plus unevenly sampled data possibly with small gaps from a simulated scanning process
     blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
     ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
@@ -800,16 +791,15 @@ def train():
     ABC_filenames_simulated = glob.glob(os.path.join('datasets/simulated', 'ABC*_train_mode*.npz'))
     training_data_filenames = blob_filenames + ABC_filenames + blob_filenames_simulated + ABC_filenames_simulated
     TrainFundamentalFormPredictor(
-        model_name,
         training_data_filenames,
         num_epochs=2,
         learning_rate=1e-7,
         warmup_steps=1e3,
-        batch_size=1024,
+        batch_size=512,
         n_epochs_to_save=1,
         n_shapes_to_save=100,
-        load_model_path=f'models/{model_name}_phase3.pkl',
-        final_save_filepath=f'{model_name}_phase4',
+        load_model_path="src/pointsastori/models/FundamentalFormPredictor.pkl",
+        final_save_filepath='FundamentalFormPredictor_phase4',
     )
 
 

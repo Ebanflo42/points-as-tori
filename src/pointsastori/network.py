@@ -35,50 +35,50 @@ MODELS_DIR = 'models/'
 
 @jit
 def orthonormal_basis_with_rotation(n: jnp.ndarray, rotation: float) -> Tuple[jnp.ndarray, jnp.ndarray]:
-	"""
-	Compute an orthonormal basis (s, t) perpendicular to normal vector n, with a specified rotation of the axes.
+    """
+    Compute an orthonormal basis (s, t) perpendicular to normal vector n, with a specified rotation of the axes.
 
-	Args:
-		n: (..., 3) array of normal vectors (will be normalized)
-		rotation: scalar rotation angle about the normal
+    Args:
+        n: (..., 3) array of normal vectors (will be normalized)
+        rotation: scalar rotation angle about the normal
 
-	Returns:
-		s_hat: (..., 3) first basis vector
-		t_hat: (..., 3) second basis vector
-	"""
-	# Normalize the normal vector
-	n_norm = jnp.linalg.norm(n, axis=-1, keepdims=True)
-	n_hat = n / jnp.maximum(n_norm, NAN_EPSILON)
+    Returns:
+        s_hat: (..., 3) first basis vector
+        t_hat: (..., 3) second basis vector
+    """
+    # Normalize the normal vector
+    n_norm = jnp.linalg.norm(n, axis=-1, keepdims=True)
+    n_hat = n / jnp.maximum(n_norm, NAN_EPSILON)
 
-	# Choose initial vector u based on which component of n is smallest
-	# If |n.x| > 0.9, use (0,1,0), otherwise use (1,0,0)
-	abs_n_x = jnp.abs(n_hat[..., 0:1])
-	u = jnp.where(
-		abs_n_x > 0.9,
-		jnp.concatenate([jnp.zeros_like(abs_n_x), jnp.ones_like(abs_n_x), jnp.zeros_like(abs_n_x)], axis=-1),
-		jnp.concatenate([jnp.ones_like(abs_n_x), jnp.zeros_like(abs_n_x), jnp.zeros_like(abs_n_x)], axis=-1),
-	)
+    # Choose initial vector u based on which component of n is smallest
+    # If |n.x| > 0.9, use (0,1,0), otherwise use (1,0,0)
+    abs_n_x = jnp.abs(n_hat[..., 0:1])
+    u = jnp.where(
+        abs_n_x > 0.9,
+        jnp.concatenate([jnp.zeros_like(abs_n_x), jnp.ones_like(abs_n_x), jnp.zeros_like(abs_n_x)], axis=-1),
+        jnp.concatenate([jnp.ones_like(abs_n_x), jnp.zeros_like(abs_n_x), jnp.zeros_like(abs_n_x)], axis=-1),
+    )
 
-	# Apply rotation about n_hat using Rodrigues' formula
-	# R = I + sin(θ) * K + (1 - cos(θ)) * K^2
-	# where K is the skew-symmetric matrix for n_hat
-	cos_rot = jnp.cos(rotation)
-	sin_rot = jnp.sin(rotation)
+    # Apply rotation about n_hat using Rodrigues' formula
+    # R = I + sin(θ) * K + (1 - cos(θ)) * K^2
+    # where K is the skew-symmetric matrix for n_hat
+    cos_rot = jnp.cos(rotation)
+    sin_rot = jnp.sin(rotation)
 
-	# Compute u_rotated = cos(θ)*u + sin(θ)*(n × u) + (1-cos(θ))*(n·u)*n
-	n_cross_u = jnp.cross(n_hat, u)
-	n_dot_u = jnp.sum(n_hat * u, axis=-1, keepdims=True)
-	u_rotated = cos_rot * u + sin_rot * n_cross_u + (1.0 - cos_rot) * n_dot_u * n_hat
+    # Compute u_rotated = cos(θ)*u + sin(θ)*(n × u) + (1-cos(θ))*(n·u)*n
+    n_cross_u = jnp.cross(n_hat, u)
+    n_dot_u = jnp.sum(n_hat * u, axis=-1, keepdims=True)
+    u_rotated = cos_rot * u + sin_rot * n_cross_u + (1.0 - cos_rot) * n_dot_u * n_hat
 
-	# Compute s = n × u (perpendicular to both)
-	s = jnp.cross(n_hat, u_rotated)
-	s_norm = jnp.linalg.norm(s, axis=-1, keepdims=True)
-	s_hat = s / jnp.maximum(s_norm, NAN_EPSILON)
+    # Compute s = n × u (perpendicular to both)
+    s = jnp.cross(n_hat, u_rotated)
+    s_norm = jnp.linalg.norm(s, axis=-1, keepdims=True)
+    s_hat = s / jnp.maximum(s_norm, NAN_EPSILON)
 
-	# Compute t = n × s (completes orthonormal basis)
-	t_hat = jnp.cross(n_hat, s_hat)
+    # Compute t = n × s (completes orthonormal basis)
+    t_hat = jnp.cross(n_hat, s_hat)
 
-	return s_hat, t_hat
+    return s_hat, t_hat
 
 
 # ========================================================================
@@ -88,435 +88,614 @@ def orthonormal_basis_with_rotation(n: jnp.ndarray, rotation: float) -> Tuple[jn
 
 @jit
 def cartesian_to_rotation_jax(u: jnp.ndarray) -> jnp.ndarray:
-	"""
-	Convert 3D unit vector to spherical coordinates (theta, phi).
+    """
+    Convert 3D unit vector to spherical coordinates (theta, phi).
 
-	Args:
-		u: (..., 3) array of 3D vectors
+    Args:
+        u: (..., 3) array of 3D vectors
 
-	Returns:
-		axes: (..., 2) array of (theta, phi) in radians
-			theta: azimuthal angle in [0, 2π]
-			phi: polar angle in [0, π]
-	"""
-	# Normalize input
-	u_norm = jnp.linalg.norm(u, axis=-1, keepdims=True)
-	u_hat = u / jnp.maximum(u_norm, NAN_EPSILON)
+    Returns:
+        axes: (..., 2) array of (theta, phi) in radians
+            theta: azimuthal angle in [0, 2π]
+            phi: polar angle in [0, π]
+    """
+    # Normalize input
+    u_norm = jnp.linalg.norm(u, axis=-1, keepdims=True)
+    u_hat = u / jnp.maximum(u_norm, NAN_EPSILON)
 
-	x = u_hat[..., 0]
-	y = u_hat[..., 1]
-	z = u_hat[..., 2]
+    x = u_hat[..., 0]
+    y = u_hat[..., 1]
+    z = u_hat[..., 2]
 
-	phi = jnp.arccos(jnp.clip(z, -1.0, 1.0))
-	safe_x = jnp.sign(x) * jnp.maximum(jnp.abs(x), NAN_EPSILON)
-	theta = jnp.arctan2(y, safe_x)
-	return jnp.stack([theta, phi], axis=-1)
+    phi = jnp.arccos(jnp.clip(z, -1.0, 1.0))
+    safe_x = jnp.sign(x) * jnp.maximum(jnp.abs(x), NAN_EPSILON)
+    theta = jnp.arctan2(y, safe_x)
+    return jnp.stack([theta, phi], axis=-1)
 
 
 @jit
 def rotation_to_cartesian_jax(axes: jnp.ndarray) -> jnp.ndarray:
-	"""
-	Convert spherical coordinates (theta, phi) to 3D unit vector.
+    """
+    Convert spherical coordinates (theta, phi) to 3D unit vector.
 
-	Args:
-		axes: (..., 2) array of (theta, phi) in radians
+    Args:
+        axes: (..., 2) array of (theta, phi) in radians
 
-	Returns:
-		u: (..., 3) array of 3D unit vectors
-	"""
-	theta = axes[..., 0]
-	phi = axes[..., 1]
+    Returns:
+        u: (..., 3) array of 3D unit vectors
+    """
+    theta = axes[..., 0]
+    phi = axes[..., 1]
 
-	# Spherical to Cartesian conversion
-	sin_phi = jnp.sin(phi)
-	cos_phi = jnp.cos(phi)
-	sin_theta = jnp.sin(theta)
-	cos_theta = jnp.cos(theta)
+    # Spherical to Cartesian conversion
+    sin_phi = jnp.sin(phi)
+    cos_phi = jnp.cos(phi)
+    sin_theta = jnp.sin(theta)
+    cos_theta = jnp.cos(theta)
 
-	x = sin_phi * cos_theta
-	y = sin_phi * sin_theta
-	z = cos_phi
+    x = sin_phi * cos_theta
+    y = sin_phi * sin_theta
+    z = cos_phi
 
-	return jnp.stack([x, y, z], axis=-1)
+    return jnp.stack([x, y, z], axis=-1)
 
 
 def _compute_shifts_from_distances(distances: jnp.ndarray, mask: jnp.ndarray) -> jnp.ndarray:
-	"""
-	Compute per-query shift from a pre-computed distance matrix.
+    """
+    Compute per-query shift from a pre-computed distance matrix.
 
-	Args:
-		distances: (batch_size, n_queries, max_points) distances from each query to each point
-		mask: (max_points,) valid-point mask
+    Args:
+        distances: (batch_size, n_queries, max_points) distances from each query to each point
+        mask: (max_points,) valid-point mask
 
-	Returns:
-		shifts: (batch_size, n_queries)
-	"""
-	k = 64
-	max_points = distances.shape[-1]
-	k_actual = min(k, max_points)
+    Returns:
+        shifts: (batch_size, n_queries)
+    """
+    k = 64
+    max_points = distances.shape[-1]
+    k_actual = min(k, max_points)
 
-	m = mask[None, None, :]  # (1, 1, max_points)
+    m = mask[None, None, :]  # (1, 1, max_points)
 
-	# top_k on negated distances: invalid points → -inf so they're never selected.
-	neg_distances = jnp.where(m, -distances, -jnp.inf)
-	neg_knn, _ = jax.lax.top_k(neg_distances, k_actual)  # (batch, n_queries, k_actual)
-	knn_dists = -neg_knn  # positive, ascending order (nearest first)
+    # top_k on negated distances: invalid points → -inf so they're never selected.
+    neg_distances = jnp.where(m, -distances, -jnp.inf)
+    neg_knn, _ = jax.lax.top_k(neg_distances, k_actual)  # (batch, n_queries, k_actual)
+    knn_dists = -neg_knn  # positive, ascending order (nearest first)
 
-	# Shift = 0.5 * max distance among k nearest valid neighbors
-	finite_knn = jnp.where(jnp.isfinite(knn_dists), knn_dists, 0.0)
-	return 0.5 * jnp.max(finite_knn, axis=-1)  # (batch, n_queries)
+    # Shift = 0.5 * max distance among k nearest valid neighbors
+    finite_knn = jnp.where(jnp.isfinite(knn_dists), knn_dists, 0.0)
+    return 0.5 * jnp.max(finite_knn, axis=-1)  # (batch, n_queries)
+
+
+
+def _compute_shifts_from_distances_sharded(distances: jnp.ndarray, mask: jnp.ndarray) -> jnp.ndarray:
+    """
+    Compute per-query shift from a pre-computed distance matrix.
+
+    Args:
+        distances: (batch_size, n_queries, max_points) distances from each query to each point
+        mask: (max_points,) valid-point mask
+
+    Returns:
+        shifts: (batch_size, n_queries)
+    """
+    #k = 64
+    #max_points = distances.shape[-1]
+    #k_actual = min(k, max_points)
+
+    m = mask[:, None, None, :]  # (n_devices, 1, 1, max_points)
+
+    # top_k on negated distances: invalid points → -inf so they're never selected.
+    neg_distances = jnp.where(m, -distances, -jnp.inf)
+    print(f"NEG DIST {neg_distances.shape}")
+    neg_knn, _ = jax.lax.top_k(neg_distances, 64)  # (batch, n_queries, k_actual)
+    knn_dists = -neg_knn  # positive, ascending order (nearest first)
+
+    # Shift = 0.5 * max distance among k nearest valid neighbors
+    finite_knn = jnp.where(jnp.isfinite(knn_dists), knn_dists, 0.0)
+    return 0.5 * jnp.max(finite_knn, axis=-1)  # (batch, n_queries)
 
 
 @jit
 def compute_lambdas_jax(shifts: jnp.ndarray) -> jnp.ndarray:
-	"""
-	Compute lambda parameter from shift.
+    """
+    Compute lambda parameter from shift.
 
-	Args:
-		shift: (...,) shift values
+    Args:
+        shift: (...,) shift values
 
-	Returns:
-		lam: (...,) lambda values
-	"""
-	return 64.0 / shifts
+    Returns:
+        lam: (...,) lambda values
+    """
+    return 64.0 / shifts
 
 
 @jit
 def torus_precompute_masked(
-	mask: jnp.ndarray,
-	points: jnp.ndarray,
-	normals: jnp.ndarray,
-	coeffs: jnp.ndarray,
+    mask: jnp.ndarray,
+    points: jnp.ndarray,
+    normals: jnp.ndarray,
+    coeffs: jnp.ndarray,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-	"""
-	Only compute torii for valid points (where mask is True).
+    """
+    Only compute torii for valid points (where mask is True).
 
-	Args:
-		mask: (max_points,) - boolean mask indicating valid points
-		points: (max_points, 3) - may contain padding
-		normals: (max_points, 3) - may contain padding
-		coeffs: (max_points, 6) - may contain padding
+    Args:
+        mask: (max_points,) - boolean mask indicating valid points
+        points: (max_points, 3) - may contain padding
+        normals: (max_points, 3) - may contain padding
+        coeffs: (max_points, 6) - may contain padding
 
-	Returns:
-		centers: (max_points, 3)
-		axes: (max_points, 2)
-		major_radii: (max_points,)
-		minor_radii: (max_points,)
-	"""
+    Returns:
+        centers: (max_points, 3)
+        axes: (max_points, 2)
+        major_radii: (max_points,)
+        minor_radii: (max_points,)
+    """
 
-	max_points = points.shape[0]
+    max_points = points.shape[0]
 
-	# Fit torus at a single point.
-	@jit
-	def solve_single(i):
-		# Center point info
-		p_i = points[i]
-		n_i = normals[i]
+    # Fit torus at a single point.
+    @jit
+    def solve_single(i):
+        # Center point info
+        p_i = points[i]
+        n_i = normals[i]
 
-		# Compute orthonormal bases
-		s_hat, t_hat = orthonormal_basis_with_rotation(n_i, 0.0)
+        # Compute orthonormal bases
+        s_hat, t_hat = orthonormal_basis_with_rotation(n_i, 0.0)
 
-		# Extract polynomial coefficients
-		a00 = coeffs[i, 0]
-		a01 = coeffs[i, 1]
-		a10 = coeffs[i, 2]
-		a11 = coeffs[i, 3]
-		a02 = coeffs[i, 4]
-		a20 = coeffs[i, 5]
+        # Extract polynomial coefficients
+        a00 = coeffs[i, 0]
+        a01 = coeffs[i, 1]
+        a10 = coeffs[i, 2]
+        a11 = coeffs[i, 3]
+        a02 = coeffs[i, 4]
+        a20 = coeffs[i, 5]
 
-		# Compute principal curvatures from polynomial fit
-		A = jnp.sqrt(1.0 + a01**2 + a10**2)
-		# A = jnp.maximum(A, NAN_EPSILON)
+        # Compute principal curvatures from polynomial fit
+        A = jnp.sqrt(1.0 + a01**2 + a10**2)
+        # A = jnp.maximum(A, NAN_EPSILON)
 
-		# Compute discriminant for eigenvector calculation
-		v1 = a20 * a01**2 - a02 * a10**2 - a02 + a20
-		v2 = a11 * (a10**2 + 1.0) - 2.0 * a01 * a10 * a20
-		term = a02 * (a10**2 + 1.0) - a01 * a10 * a11 + a20 * (a01**2 + 1.0)
-		discriminant = (1.0 + a01**2 + a10**2) * (a11**2 - 4.0 * a02 * a20) + term**2
-		discriminant = jnp.sqrt(jnp.maximum(discriminant, NAN_EPSILON))  # sqrt not differentiable at 0
+        # Compute discriminant for eigenvector calculation
+        v1 = a20 * a01**2 - a02 * a10**2 - a02 + a20
+        v2 = a11 * (a10**2 + 1.0) - 2.0 * a01 * a10 * a20
+        term = a02 * (a10**2 + 1.0) - a01 * a10 * a11 + a20 * (a01**2 + 1.0)
+        discriminant = (1.0 + a01**2 + a10**2) * (a11**2 - 4.0 * a02 * a20) + term**2
+        discriminant = jnp.sqrt(jnp.maximum(discriminant, NAN_EPSILON))  # sqrt not differentiable at 0
 
-		ev_pos_0 = v1 + discriminant
-		ev_pos_0 = jnp.sign(ev_pos_0) * jnp.maximum(jnp.abs(ev_pos_0), NAN_EPSILON)
-		ev_pos = jnp.array([ev_pos_0, v2])
+        ev_pos_0 = v1 + discriminant
+        ev_pos_0 = jnp.sign(ev_pos_0) * jnp.maximum(jnp.abs(ev_pos_0), NAN_EPSILON)
+        ev_pos = jnp.array([ev_pos_0, v2])
 
-		ev_neg_1 = v2
-		ev_neg_1 = jnp.sign(ev_neg_1) * jnp.maximum(jnp.abs(ev_neg_1), NAN_EPSILON)
-		ev_neg = jnp.array([v1 - discriminant, ev_neg_1])
+        ev_neg_1 = v2
+        ev_neg_1 = jnp.sign(ev_neg_1) * jnp.maximum(jnp.abs(ev_neg_1), NAN_EPSILON)
+        ev_neg = jnp.array([v1 - discriminant, ev_neg_1])
 
-		# Even though normalization isn't necessary because we take a Rayleigh quotient, it helps numerically.
-		ev_pos /= jnp.linalg.norm(ev_pos)
-		ev_neg /= jnp.linalg.norm(ev_neg)
-		ev_pos_x = ev_pos[0]
-		ev_pos_y = ev_pos[1]
-		ev_neg_x = ev_neg[0]
-		ev_neg_y = ev_neg[1]
+        # Even though normalization isn't necessary because we take a Rayleigh quotient, it helps numerically.
+        ev_pos /= jnp.linalg.norm(ev_pos)
+        ev_neg /= jnp.linalg.norm(ev_neg)
+        ev_pos_x = ev_pos[0]
+        ev_pos_y = ev_pos[1]
+        ev_neg_x = ev_neg[0]
+        ev_neg_y = ev_neg[1]
 
-		# Convert to 3D eigenvectors
-		dQstards = s_hat + a10 * n_i  # (3, )
-		dQstardt = t_hat + a01 * n_i  # (3, )
+        # Convert to 3D eigenvectors
+        dQstards = s_hat + a10 * n_i  # (3, )
+        dQstardt = t_hat + a01 * n_i  # (3, )
 
-		v_pos = ev_pos_x * dQstards + ev_pos_y * dQstardt
-		v_neg = ev_neg_x * dQstards + ev_neg_y * dQstardt
+        v_pos = ev_pos_x * dQstards + ev_pos_y * dQstardt
+        v_neg = ev_neg_x * dQstards + ev_neg_y * dQstardt
 
-		# Compute normal at fitted point
-		normal = (n_i - a10 * s_hat - a01 * t_hat) / A
+        # Compute normal at fitted point
+        normal = (n_i - a10 * s_hat - a01 * t_hat) / A
 
-		# Compute curvatures using Rayleigh quotient
-		I_11 = 1.0 + a10**2
-		I_12 = a10 * a01
-		I_22 = 1.0 + a01**2
+        # Compute curvatures using Rayleigh quotient
+        I_11 = 1.0 + a10**2
+        I_12 = a10 * a01
+        I_22 = 1.0 + a01**2
 
-		II_11 = 2.0 * a20 / A
-		II_12 = a11 / A
-		II_22 = 2.0 * a02 / A
+        II_11 = 2.0 * a20 / A
+        II_12 = a11 / A
+        II_22 = 2.0 * a02 / A
 
-		# Compute kappa = (ev^T @ II @ ev) / (ev^T @ I @ ev)
-		# For positive eigenvector
-		II_ev_pos_x = II_11 * ev_pos_x + II_12 * ev_pos_y
-		II_ev_pos_y = II_12 * ev_pos_x + II_22 * ev_pos_y
-		I_ev_pos_x = I_11 * ev_pos_x + I_12 * ev_pos_y
-		I_ev_pos_y = I_12 * ev_pos_x + I_22 * ev_pos_y
+        # Compute kappa = (ev^T @ II @ ev) / (ev^T @ I @ ev)
+        # For positive eigenvector
+        II_ev_pos_x = II_11 * ev_pos_x + II_12 * ev_pos_y
+        II_ev_pos_y = II_12 * ev_pos_x + II_22 * ev_pos_y
+        I_ev_pos_x = I_11 * ev_pos_x + I_12 * ev_pos_y
+        I_ev_pos_y = I_12 * ev_pos_x + I_22 * ev_pos_y
 
-		numer_pos = ev_pos_x * II_ev_pos_x + ev_pos_y * II_ev_pos_y
-		denom_pos = ev_pos_x * I_ev_pos_x + ev_pos_y * I_ev_pos_y
-		denom_pos = jnp.sign(denom_pos) * jnp.maximum(jnp.abs(denom_pos), NAN_EPSILON)
-		kappa_pos = numer_pos / denom_pos
-		# kappa_pos = jax.lax.cond(numer_pos == 0, lambda: NAN_EPSILON, lambda: numer_pos / denom_pos)
+        numer_pos = ev_pos_x * II_ev_pos_x + ev_pos_y * II_ev_pos_y
+        denom_pos = ev_pos_x * I_ev_pos_x + ev_pos_y * I_ev_pos_y
+        denom_pos = jnp.sign(denom_pos) * jnp.maximum(jnp.abs(denom_pos), NAN_EPSILON)
+        kappa_pos = numer_pos / denom_pos
+        # kappa_pos = jax.lax.cond(numer_pos == 0, lambda: NAN_EPSILON, lambda: numer_pos / denom_pos)
 
-		# For negative eigenvector
-		II_ev_neg_x = II_11 * ev_neg_x + II_12 * ev_neg_y
-		II_ev_neg_y = II_12 * ev_neg_x + II_22 * ev_neg_y
-		I_ev_neg_x = I_11 * ev_neg_x + I_12 * ev_neg_y
-		I_ev_neg_y = I_12 * ev_neg_x + I_22 * ev_neg_y
+        # For negative eigenvector
+        II_ev_neg_x = II_11 * ev_neg_x + II_12 * ev_neg_y
+        II_ev_neg_y = II_12 * ev_neg_x + II_22 * ev_neg_y
+        I_ev_neg_x = I_11 * ev_neg_x + I_12 * ev_neg_y
+        I_ev_neg_y = I_12 * ev_neg_x + I_22 * ev_neg_y
 
-		numer_neg = ev_neg_x * II_ev_neg_x + ev_neg_y * II_ev_neg_y
-		denom_neg = ev_neg_x * I_ev_neg_x + ev_neg_y * I_ev_neg_y
-		denom_neg = jnp.sign(denom_neg) * jnp.maximum(jnp.abs(denom_neg), NAN_EPSILON)
-		kappa_neg = numer_neg / denom_neg
-		# kappa_neg = jax.lax.cond(numer_neg == 0, lambda: NAN_EPSILON, lambda: numer_neg / denom_neg)
+        numer_neg = ev_neg_x * II_ev_neg_x + ev_neg_y * II_ev_neg_y
+        denom_neg = ev_neg_x * I_ev_neg_x + ev_neg_y * I_ev_neg_y
+        denom_neg = jnp.sign(denom_neg) * jnp.maximum(jnp.abs(denom_neg), NAN_EPSILON)
+        kappa_neg = numer_neg / denom_neg
+        # kappa_neg = jax.lax.cond(numer_neg == 0, lambda: NAN_EPSILON, lambda: numer_neg / denom_neg)
 
-		# Identify min/max curvatures
-		abs_kappa_pos = jnp.abs(kappa_pos)
-		abs_kappa_neg = jnp.abs(kappa_neg)
+        # Identify min/max curvatures
+        abs_kappa_pos = jnp.abs(kappa_pos)
+        abs_kappa_neg = jnp.abs(kappa_neg)
 
-		use_pos_as_min = abs_kappa_pos < abs_kappa_neg
-		kappa_min = jnp.where(use_pos_as_min, kappa_pos, kappa_neg)
-		kappa_max = jnp.where(use_pos_as_min, kappa_neg, kappa_pos)
-		v_min = jnp.where(use_pos_as_min, v_pos, v_neg)
+        use_pos_as_min = abs_kappa_pos < abs_kappa_neg
+        kappa_min = jnp.where(use_pos_as_min, kappa_pos, kappa_neg)
+        kappa_max = jnp.where(use_pos_as_min, kappa_neg, kappa_pos)
+        v_min = jnp.where(use_pos_as_min, v_pos, v_neg)
 
-		abs_kappa_max = jnp.maximum(jnp.abs(kappa_max), NAN_EPSILON)
-		abs_kappa_min = jnp.maximum(jnp.abs(kappa_min), NAN_EPSILON)
+        abs_kappa_max = jnp.maximum(jnp.abs(kappa_max), NAN_EPSILON)
+        abs_kappa_min = jnp.maximum(jnp.abs(kappa_min), NAN_EPSILON)
 
-		# Compute torus parameters
-		r = 1.0 / abs_kappa_max
-		R = 1.0 / abs_kappa_min - jnp.sign(kappa_max * kappa_min) * r
-		# s_R = jax.lax.cond(R >= 0, lambda: 1.0, lambda: -1.0)
-		# major_radius = s_R * jnp.maximum(jnp.abs(R), NAN_EPSILON)
+        # Compute torus parameters
+        r = 1.0 / abs_kappa_max
+        R = 1.0 / abs_kappa_min - jnp.sign(kappa_max * kappa_min) * r
+        # s_R = jax.lax.cond(R >= 0, lambda: 1.0, lambda: -1.0)
+        # major_radius = s_R * jnp.maximum(jnp.abs(R), NAN_EPSILON)
 
-		# Sign convention from C++
-		s = jnp.where(((kappa_max < 0) & (kappa_min < 0)) | ((kappa_max < 0) & (kappa_min > 0)), 1.0, -1.0)
+        # Sign convention from C++
+        s = jnp.where(((kappa_max < 0) & (kappa_min < 0)) | ((kappa_max < 0) & (kappa_min > 0)), 1.0, -1.0)
 
-		# Torus center
-		center = p_i + a00 * n_i - (s / abs_kappa_min) * normal
+        # Torus center
+        center = p_i + a00 * n_i - (s / abs_kappa_min) * normal
 
-		# Torus axis (u = normal × v_min, normalized)
-		u = jnp.cross(normal, v_min)
-		u_norm = jnp.linalg.norm(u)
-		u = u / jnp.maximum(u_norm, NAN_EPSILON)
+        # Torus axis (u = normal × v_min, normalized)
+        u = jnp.cross(normal, v_min)
+        u_norm = jnp.linalg.norm(u)
+        u = u / jnp.maximum(u_norm, NAN_EPSILON)
 
-		# Convert to rotation representation
-		axis = cartesian_to_rotation_jax(u)  # (2, )
+        # Convert to rotation representation
+        axis = cartesian_to_rotation_jax(u)  # (2, )
 
-		major_radius = R
-		minor_radius = s * r
+        major_radius = R
+        minor_radius = s * r
 
-		return center, axis, major_radius, minor_radius
+        return center, axis, major_radius, minor_radius
 
-	# Compute torii for all indices (including invalid ones)
-	centers, axes, major_radii, minor_radii = jax.vmap(lambda i: solve_single(i), in_axes=0)(jnp.arange(max_points))
-	return centers, axes, major_radii, minor_radii
+    # Compute torii for all indices (including invalid ones)
+    centers, axes, major_radii, minor_radii = jax.vmap(lambda i: solve_single(i), in_axes=0)(jnp.arange(max_points))
+    return centers, axes, major_radii, minor_radii
+
+
+@jit
+def torus_precompute_masked_sharded(
+    mask: jnp.ndarray,       # (n_devices, max_points)
+    points: jnp.ndarray,     # (n_devices, max_points, 3)
+    normals: jnp.ndarray,    # (n_devices, max_points, 3)
+    coeffs: jnp.ndarray,     # (n_devices, max_points, 6)
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """
+    Sharded version of torus_precompute_masked.
+
+    Adds a leading device axis to every input and vmaps the original
+    per-shape function across it.
+    """
+    return jax.vmap(torus_precompute_masked, in_axes=(0, 0, 0, 0))(
+        mask, points, normals, coeffs
+    )
 
 
 @jit
 def torus_signed_distance(q, center, axis, major_radius, minor_radius):
-	"""
-	Compute the signed distance at q to a single (signed) torus.
-	"""
-	axis3d = rotation_to_cartesian_jax(axis)
+    """
+    Compute the signed distance at q to a single (signed) torus.
+    """
+    axis3d = rotation_to_cartesian_jax(axis)
 
-	# Distance from query to torus center
-	r_vec = q - center
+    # Distance from query to torus center
+    r_vec = q - center
 
-	# v = |r_vec × axis|
-	cross_prod = jnp.cross(r_vec, axis3d)
-	v = jnp.linalg.norm(cross_prod, axis=-1)
+    # v = |r_vec × axis|
+    cross_prod = jnp.cross(r_vec, axis3d)
+    v = jnp.linalg.norm(cross_prod, axis=-1)
 
-	# Distance components
-	d1 = v - major_radius
-	d2 = jnp.sum(r_vec * axis3d, axis=-1)
+    # Distance components
+    d1 = v - major_radius
+    d2 = jnp.sum(r_vec * axis3d, axis=-1)
 
-	# Combined distance to torus surface
-	d = jnp.sqrt(d1**2 + d2**2)
+    # Combined distance to torus surface
+    d = jnp.sqrt(d1**2 + d2**2)
 
-	s = jnp.sign(minor_radius)  # (1, 1, max_points)
-	g_z = s * (d - jnp.abs(minor_radius))  # (batch, n_queries, max_points)
+    s = jnp.sign(minor_radius)  # (1, 1, max_points)
+    g_z = s * (d - jnp.abs(minor_radius))  # (batch, n_queries, max_points)
 
-	return g_z
+    return g_z
 
 
 @jit
 def torus_distance_gradient_masked(
-	mask: jnp.ndarray,
-	queries: jnp.ndarray,
-	points: jnp.ndarray,
-	centers: jnp.ndarray,
-	axes: jnp.ndarray,
-	major_radii: jnp.ndarray,
-	minor_radii: jnp.ndarray,
+    mask: jnp.ndarray,
+    queries: jnp.ndarray,
+    points: jnp.ndarray,
+    centers: jnp.ndarray,
+    axes: jnp.ndarray,
+    major_radii: jnp.ndarray,
+    minor_radii: jnp.ndarray,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-	"""
-	Only sum over torii at valid points (where mask is True).
+    """
+    Only sum over torii at valid points (where mask is True).
 
-	Args:
-		mask: (max_points,) - boolean mask indicating valid points
-		queries: (batch_size, n_queries, 3) array of query points
-		points: (max_points, 3) - may contain padding
-		centers: (max_points, 3) - torii centers
-		axes: (max_points, 2) - torii axes
-		major_radii: (max_points,)
-		minor_radii: (max_points,)
+    Args:
+        mask: (max_points,) - boolean mask indicating valid points
+        queries: (batch_size, n_queries, 3) array of query points
+        points: (max_points, 3) - may contain padding
+        centers: (max_points, 3) - torii centers
+        axes: (max_points, 2) - torii axes
+        major_radii: (max_points,)
+        minor_radii: (max_points,)
 
-	Returns:
-		distances: (batch_size, n_queries,) array of signed distances
-		gradients: (batch_size, n_queries, 3) array of signed distance gradients
-	"""
-	batch_size, n_queries, _ = queries.shape
+    Returns:
+        distances: (batch_size, n_queries,) array of signed distances
+        gradients: (batch_size, n_queries, 3) array of signed distance gradients
+    """
+    batch_size, n_queries, _ = queries.shape
 
-	# Create validity mask for torii without NaNs --- in case there were still NaNs that escaped torus_precompute_masked()
-	valid_torus_mask = (
-		mask
-		& jnp.isfinite(centers).all(axis=-1)
-		& jnp.isfinite(axes).all(axis=-1)
-		& jnp.isfinite(major_radii)
-		& jnp.isfinite(minor_radii)
-	)  # (max_points,)
-	# valid_torus_mask = mask  # (max_points, )
+    # Create validity mask for torii without NaNs --- in case there were still NaNs that escaped torus_precompute_masked()
+    valid_torus_mask = (
+        mask
+        & jnp.isfinite(centers).all(axis=-1)
+        & jnp.isfinite(axes).all(axis=-1)
+        & jnp.isfinite(major_radii)
+        & jnp.isfinite(minor_radii)
+    )  # (max_points,)
+    # valid_torus_mask = mask  # (max_points, )
 
-	axis3d = rotation_to_cartesian_jax(axes)  # (max_points, 3)
+    axis3d = rotation_to_cartesian_jax(axes)  # (max_points, 3)
 
-	# Compute distance and gradient for each query-torus pair
+    # Compute distance and gradient for each query-torus pair
 
-	# Reshape for broadcasting: queries (batch, n_queries, 1, 3)
-	q = queries[:, :, None, :]  # (batch, n_queries, 1, 3)
+    # Reshape for broadcasting: queries (batch, n_queries, 1, 3)
+    q = queries[:, :, None, :]  # (batch, n_queries, 1, 3)
 
-	# Broadcast points, centers, etc. for all queries
-	# (1, 1, max_points, 3)
-	p_i = points[None, None, :, :]
+    # Broadcast points, centers, etc. for all queries
+    # (1, 1, max_points, 3)
+    p_i = points[None, None, :, :]
 
-	# Compute query-to-point distances once and reuse for both shift and weight computation.
-	# This avoids materializing the (batch, n_queries, max_points) distance tensor twice.
-	rVec = q - p_i  # (batch, n_queries, max_points, 3)
-	dist_to_point = jnp.linalg.norm(rVec, axis=-1)  # (batch, n_queries, max_points)
+    # Compute query-to-point distances once and reuse for both shift and weight computation.
+    # This avoids materializing the (batch, n_queries, max_points) distance tensor twice.
+    rVec = q - p_i  # (batch, n_queries, max_points, 3)
+    dist_to_point = jnp.linalg.norm(rVec, axis=-1)  # (batch, n_queries, max_points)
 
-	shifts = _compute_shifts_from_distances(dist_to_point, valid_torus_mask)  # (batch, n_queries)
-	lam = compute_lambdas_jax(shifts)  # (batch_size, n_queries)
-	c_i = centers[None, None, :, :]
-	axis_i = axis3d[None, None, :, :]
-	R_i = major_radii[None, None, :]
-	r_i = minor_radii[None, None, :]
-	mask_i = valid_torus_mask[None, None, :]  # (1, 1, max_points)
+    shifts = _compute_shifts_from_distances(dist_to_point, valid_torus_mask)  # (batch, n_queries)
+    lam = compute_lambdas_jax(shifts)  # (batch_size, n_queries)
+    c_i = centers[None, None, :, :]
+    axis_i = axis3d[None, None, :, :]
+    R_i = major_radii[None, None, :]
+    r_i = minor_radii[None, None, :]
+    mask_i = valid_torus_mask[None, None, :]  # (1, 1, max_points)
 
-	# Distance from query to torus center
-	r_vec = q - c_i  # (batch, n_queries, max_points, 3)
+    # Distance from query to torus center
+    r_vec = q - c_i  # (batch, n_queries, max_points, 3)
 
-	# v = |r_vec × axis|
-	cross_prod = jnp.cross(r_vec, axis_i)  # (batch, n_queries, max_points, 3)
-	v = jnp.linalg.norm(cross_prod, axis=-1)  # (batch, n_queries, max_points)
+    # v = |r_vec × axis|
+    cross_prod = jnp.cross(r_vec, axis_i)  # (batch, n_queries, max_points, 3)
+    v = jnp.linalg.norm(cross_prod, axis=-1)  # (batch, n_queries, max_points)
 
-	# Distance components
-	d1 = v - R_i  # (batch, n_queries, max_points)
-	d2 = jnp.sum(r_vec * axis_i, axis=-1)  # (batch, n_queries, max_points)
+    # Distance components
+    d1 = v - R_i  # (batch, n_queries, max_points)
+    d2 = jnp.sum(r_vec * axis_i, axis=-1)  # (batch, n_queries, max_points)
 
-	# Combined distance to torus surface
-	d = jnp.sqrt(d1**2 + d2**2)  # (batch, n_queries, max_points)
+    # Combined distance to torus surface
+    d = jnp.sqrt(d1**2 + d2**2)  # (batch, n_queries, max_points)
 
-	s = jnp.sign(r_i)  # (1, 1, max_points)
-	g_z = s * (d - jnp.abs(r_i))  # (batch, n_queries, max_points)
-	g_z = jnp.where(mask_i, g_z, 0.0)  # apply mask
+    s = jnp.sign(r_i)  # (1, 1, max_points)
+    g_z = s * (d - jnp.abs(r_i))  # (batch, n_queries, max_points)
+    g_z = jnp.where(mask_i, g_z, 0.0)  # apply mask
 
-	# Gradient computation (matrix G from C++ code)
-	# G is a 2x3 matrix, w is a 2-vector, grad = s * (w^T @ G)^T
-	v_safe = jnp.maximum(v, NAN_EPSILON)
+    # Gradient computation (matrix G from C++ code)
+    # G is a 2x3 matrix, w is a 2-vector, grad = s * (w^T @ G)^T
+    v_safe = jnp.maximum(v, NAN_EPSILON)
 
-	G_11 = (
-		axis_i[:, :, :, 0] * axis_i[:, :, :, 1] * (c_i[:, :, :, 1] - q[:, :, :, 1])
-		+ axis_i[:, :, :, 0] * axis_i[:, :, :, 2] * (c_i[:, :, :, 2] - q[:, :, :, 2])
-		- (axis_i[:, :, :, 1] ** 2 + axis_i[:, :, :, 2] ** 2) * (c_i[:, :, :, 0] - q[:, :, :, 0])
-	) / v_safe
+    G_11 = (
+        axis_i[:, :, :, 0] * axis_i[:, :, :, 1] * (c_i[:, :, :, 1] - q[:, :, :, 1])
+        + axis_i[:, :, :, 0] * axis_i[:, :, :, 2] * (c_i[:, :, :, 2] - q[:, :, :, 2])
+        - (axis_i[:, :, :, 1] ** 2 + axis_i[:, :, :, 2] ** 2) * (c_i[:, :, :, 0] - q[:, :, :, 0])
+    ) / v_safe
 
-	G_12 = (
-		axis_i[:, :, :, 0] * axis_i[:, :, :, 1] * (c_i[:, :, :, 0] - q[:, :, :, 0])
-		+ axis_i[:, :, :, 1] * axis_i[:, :, :, 2] * (c_i[:, :, :, 2] - q[:, :, :, 2])
-		- (axis_i[:, :, :, 0] ** 2 + axis_i[:, :, :, 2] ** 2) * (c_i[:, :, :, 1] - q[:, :, :, 1])
-	) / v_safe
+    G_12 = (
+        axis_i[:, :, :, 0] * axis_i[:, :, :, 1] * (c_i[:, :, :, 0] - q[:, :, :, 0])
+        + axis_i[:, :, :, 1] * axis_i[:, :, :, 2] * (c_i[:, :, :, 2] - q[:, :, :, 2])
+        - (axis_i[:, :, :, 0] ** 2 + axis_i[:, :, :, 2] ** 2) * (c_i[:, :, :, 1] - q[:, :, :, 1])
+    ) / v_safe
 
-	G_13 = (
-		axis_i[:, :, :, 0] * axis_i[:, :, :, 2] * (c_i[:, :, :, 0] - q[:, :, :, 0])
-		+ axis_i[:, :, :, 1] * axis_i[:, :, :, 2] * (c_i[:, :, :, 1] - q[:, :, :, 1])
-		- (axis_i[:, :, :, 0] ** 2 + axis_i[:, :, :, 1] ** 2) * (c_i[:, :, :, 2] - q[:, :, :, 2])
-	) / v_safe
+    G_13 = (
+        axis_i[:, :, :, 0] * axis_i[:, :, :, 2] * (c_i[:, :, :, 0] - q[:, :, :, 0])
+        + axis_i[:, :, :, 1] * axis_i[:, :, :, 2] * (c_i[:, :, :, 1] - q[:, :, :, 1])
+        - (axis_i[:, :, :, 0] ** 2 + axis_i[:, :, :, 1] ** 2) * (c_i[:, :, :, 2] - q[:, :, :, 2])
+    ) / v_safe
 
-	G_21 = axis_i[:, :, :, 0]
-	G_22 = axis_i[:, :, :, 1]
-	G_23 = axis_i[:, :, :, 2]
+    G_21 = axis_i[:, :, :, 0]
+    G_22 = axis_i[:, :, :, 1]
+    G_23 = axis_i[:, :, :, 2]
 
-	# Weight vector w = (d1, d2) / ||(d1, d2)||
-	d_safe = jnp.maximum(d, NAN_EPSILON)
-	w_x = d1 / d_safe
-	w_y = d2 / d_safe
+    # Weight vector w = (d1, d2) / ||(d1, d2)||
+    d_safe = jnp.maximum(d, NAN_EPSILON)
+    w_x = d1 / d_safe
+    w_y = d2 / d_safe
 
-	# Gradient: grad = s * (w^T @ G)^T = s * G^T @ w
-	grad_x = s * (w_x * G_11 + w_y * G_21)
-	grad_y = s * (w_x * G_12 + w_y * G_22)
-	grad_z = s * (w_x * G_13 + w_y * G_23)
+    # Gradient: grad = s * (w^T @ G)^T = s * G^T @ w
+    grad_x = s * (w_x * G_11 + w_y * G_21)
+    grad_y = s * (w_x * G_12 + w_y * G_22)
+    grad_z = s * (w_x * G_13 + w_y * G_23)
 
-	# Apply mask to gradients
-	grad_x = jnp.where(mask_i, grad_x, 0.0)
-	grad_y = jnp.where(mask_i, grad_y, 0.0)
-	grad_z = jnp.where(mask_i, grad_z, 0.0)
+    # Apply mask to gradients
+    grad_x = jnp.where(mask_i, grad_x, 0.0)
+    grad_y = jnp.where(mask_i, grad_y, 0.0)
+    grad_z = jnp.where(mask_i, grad_z, 0.0)
 
-	grad_g = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (batch, n_queries, max_points, 3)
+    grad_g = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (batch, n_queries, max_points, 3)
 
-	# Compute exponential weights
-	rHat = rVec / jnp.maximum(dist_to_point, NAN_EPSILON)[:, :, :, None]
+    # Compute exponential weights
+    rHat = rVec / jnp.maximum(dist_to_point, NAN_EPSILON)[:, :, :, None]
 
-	# Exponential weight
-	lam_expanded = lam[:, :, None]  # (batch, n_queries, 1)
-	shift_expanded = shifts[:, :, None]  # (batch, n_queries, 1)
-	weight = jnp.exp(-lam_expanded * (dist_to_point - shift_expanded))  # (batch, n_queries, max_points)
+    # Exponential weight
+    lam_expanded = lam[:, :, None]  # (batch, n_queries, 1)
+    shift_expanded = shifts[:, :, None]  # (batch, n_queries, 1)
+    weight = jnp.exp(-lam_expanded * (dist_to_point - shift_expanded))  # (batch, n_queries, max_points)
 
-	# Apply mask to weights
-	weight = jnp.where(mask_i, weight, 0.0)
+    # Apply mask to weights
+    weight = jnp.where(mask_i, weight, 0.0)
 
-	# Accumulate: grad_g_minus_lambda_n_g, g, n
-	grad_g_minus_lambda_n_g = jnp.sum(
-		weight[:, :, :, None] * (grad_g - lam_expanded[:, :, :, None] * rHat * g_z[:, :, :, None]), axis=2
-	)  # (batch, n_queries, 3)
+    # Accumulate: grad_g_minus_lambda_n_g, g, n
+    grad_g_minus_lambda_n_g = jnp.sum(
+        weight[:, :, :, None] * (grad_g - lam_expanded[:, :, :, None] * rHat * g_z[:, :, :, None]), axis=2
+    )  # (batch, n_queries, 3)
 
-	g = jnp.sum(weight * g_z, axis=2)  # (batch, n_queries)
-	n = jnp.sum(weight[:, :, :, None] * rHat, axis=2)  # (batch, n_queries, 3)
+    g = jnp.sum(weight * g_z, axis=2)  # (batch, n_queries)
+    n = jnp.sum(weight[:, :, :, None] * rHat, axis=2)  # (batch, n_queries, 3)
 
-	normalization = jnp.sum(weight, axis=2, keepdims=True)  # (batch, n_queries, 1)
-	normalization_safe = jnp.maximum(normalization, NAN_EPSILON)
+    normalization = jnp.sum(weight, axis=2, keepdims=True)  # (batch, n_queries, 1)
+    normalization_safe = jnp.maximum(normalization, NAN_EPSILON)
 
-	# Compute final distance and gradient
+    # Compute final distance and gradient
 
-	A = grad_g_minus_lambda_n_g / normalization_safe  # (batch, n_queries, 3)
-	B = lam_expanded * n / normalization_safe  # (batch, n_queries, 3)
-	dist = g / normalization_safe[:, :, 0]
-	grad = A + dist[:, :, None] * B  # (batch, n_queries, 3)
+    A = grad_g_minus_lambda_n_g / normalization_safe  # (batch, n_queries, 3)
+    B = lam_expanded * n / normalization_safe  # (batch, n_queries, 3)
+    dist = g / normalization_safe[:, :, 0]
+    grad = A + dist[:, :, None] * B  # (batch, n_queries, 3)
 
-	return dist, grad
+    return dist, grad
+
+
+@jit
+def torus_distance_gradient_masked_with_clamp(
+    mask: jnp.ndarray,                    # (n_devices, max_points)
+    queries: jnp.ndarray,                 # (n_devices, batch, n_queries, 3)
+    points: jnp.ndarray,                  # (n_devices, max_points, 3)
+    centers: jnp.ndarray,                 # (n_devices, max_points, 3)
+    axes: jnp.ndarray,                    # (n_devices, max_points, 2)
+    major_radii: jnp.ndarray,             # (n_devices, max_points)
+    minor_radii: jnp.ndarray,             # (n_devices, max_points)
+    neighborhood_radii: jnp.ndarray,      # (n_devices, max_points)
+    uncertainties: jnp.ndarray,           # (n_devices, max_points)
+):
+    n_devices, batch_size, n_queries, _ = queries.shape
+
+    # --- Validity mask: keep the device axis ---
+    valid_torus_mask = (
+        mask
+        & jnp.isfinite(centers).all(axis=-1)
+        & jnp.isfinite(axes).all(axis=-1)
+        & jnp.isfinite(major_radii)
+        & jnp.isfinite(minor_radii)
+    )  # (n_devices, max_points)
+
+    axis3d = rotation_to_cartesian_jax(axes)  # (n_devices, max_points, 3)
+
+    # --- Broadcasting: q and p_i are 5D with device axis first ---
+    q = queries[:, :, :, None, :]      # (D, B, Q, 1, P, 3)?  NO — see note
+    # Wait: queries is (D, B, Q, 3). Adding a None at position 3 gives:
+    # (D, B, Q, 1, 3) — 5D. Good.
+    # But to broadcast against points (D, P, 3) we need points as (D, 1, 1, P, 3).
+    q = queries[:, :, :, None, :]      # (D, B, Q, 1, 3)
+    p_i = points[:, None, None, :, :]  # (D, 1, 1, P, 3)
+    rVec = q - p_i                     # (D, B, Q, P, 3)
+    dist_to_point = jnp.linalg.norm(rVec, axis=-1)  # (D, B, Q, P)
+
+    shifts = _compute_shifts_from_distances_sharded(dist_to_point, valid_torus_mask)
+    lam = compute_lambdas_jax(shifts)   # (D, B, Q)
+
+    # Torus parameters, broadcast to (D, 1, 1, P, ...)
+    c_i = centers[:, None, None, :, :]      # (D, 1, 1, P, 3)
+    axis_i = axis3d[:, None, None, :, :]    # (D, 1, 1, P, 3)
+    R_i = major_radii[:, None, None, :]     # (D, 1, 1, P)
+    r_i = minor_radii[:, None, None, :]     # (D, 1, 1, P)
+    mask_i = valid_torus_mask[:, None, None, :]  # (D, 1, 1, P)
+
+    r_vec = q - c_i                         # (D, B, Q, P, 3)
+    cross_prod = jnp.cross(r_vec, axis_i)   # (D, B, Q, P, 3)
+    v = jnp.linalg.norm(cross_prod, axis=-1)  # (D, B, Q, P)
+
+    d1 = v - R_i                            # (D, B, Q, P)
+    d2 = jnp.sum(r_vec * axis_i, axis=-1)   # (D, B, Q, P)
+    d  = jnp.sqrt(d1**2 + d2**2)            # (D, B, Q, P)
+
+    s = jnp.sign(r_i)                       # (D, 1, 1, P)
+    g_z = s * (d - jnp.abs(r_i))            # (D, B, Q, P)
+    g_z_ = jnp.where(mask_i, g_z, 0.0)      # (D, B, Q, P)
+
+    sphere_dist = dist_to_point - neighborhood_radii[:, :, None, None]
+    #             (D, B, Q, P)  - (D, 1, 1, P) -> (D, B, Q, P)
+    g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
+
+    # --- Torus gradient (same math, all arrays are 5D with device axis) ---
+    v_safe = jnp.maximum(v, NAN_EPSILON)
+
+    G_11 = (
+        axis_i[..., 0] * axis_i[..., 1] * (c_i[..., 1] - q[..., 1])
+        + axis_i[..., 0] * axis_i[..., 2] * (c_i[..., 2] - q[..., 2])
+        - (axis_i[..., 1]**2 + axis_i[..., 2]**2) * (c_i[..., 0] - q[..., 0])
+    ) / v_safe
+    G_12 = (
+        axis_i[..., 0] * axis_i[..., 1] * (c_i[..., 0] - q[..., 0])
+        + axis_i[..., 1] * axis_i[..., 2] * (c_i[..., 2] - q[..., 2])
+        - (axis_i[..., 0] ** 2 + axis_i[..., 2] ** 2) * (c_i[..., 1] - q[..., 1])
+    ) / v_safe
+    G_13 = (
+        axis_i[..., 0] * axis_i[..., 2] * (c_i[..., 0] - q[..., 0])
+        + axis_i[..., 1] * axis_i[..., 2] * (c_i[..., 1] - q[..., 1])
+        - (axis_i[..., 0] ** 2 + axis_i[..., 1] ** 2) * (c_i[..., 2] - q[..., 2])
+    ) / v_safe
+
+    G_21 = axis_i[..., 0]
+    G_22 = axis_i[..., 1]
+    G_23 = axis_i[..., 2]
+
+    d_safe = jnp.maximum(d, NAN_EPSILON)
+    w_x = d1 / d_safe
+    w_y = d2 / d_safe
+
+    grad_x = s * (w_x * G_11 + w_y * G_21)
+    grad_y = s * (w_x * G_12 + w_y * G_22)
+    grad_z = s * (w_x * G_13 + w_y * G_23)
+
+    grad_x = jnp.where(mask_i, grad_x, 0.0)
+    grad_y = jnp.where(mask_i, grad_y, 0.0)
+    grad_z = jnp.where(mask_i, grad_z, 0.0)
+
+    rHat = rVec / jnp.maximum(dist_to_point, NAN_EPSILON)[..., None]
+
+    grad_g_ = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (D, B, Q, P, 3)
+    grad_g = jnp.where(sphere_dist[..., None] > g_z_[..., None], grad_g_, rHat)
+
+    lam_expanded = lam[:, :, :, None]       # (D, B, Q, 1)
+    shift_expanded = shifts[:, :, :, None]  # (D, B, Q, 1)
+    weight = jnp.exp(
+        -lam_expanded * (dist_to_point - shift_expanded)
+    )  # (D, B, Q, P)
+    weight = jnp.where(mask_i, weight, 0.0)
+
+    grad_g_minus_lambda_n_g = jnp.sum(
+        weight[..., None] * (grad_g - lam_expanded[..., None] * rHat * g_z[..., None]),
+        axis=3,
+    )  # (D, B, Q, 3)
+
+    g = jnp.sum(weight * g_z, axis=3)  # (D, B, Q)
+    n = jnp.sum(weight[..., None] * rHat, axis=3)  # (D, B, Q, 3)
+
+    normalization = jnp.sum(weight, axis=3, keepdims=True)  # (D, B, Q, 1)
+    normalization_safe = jnp.maximum(normalization, NAN_EPSILON)
+
+    # --- FIX: uncertainties needs an explicit point-axis position ---
+    interpolated_uncertainty = jnp.sum(
+        weight * uncertainties[:, :, None, None], axis=3
+    )  # (D, B, Q)
+
+    A = grad_g_minus_lambda_n_g / normalization_safe  # (D, B, Q, 3)
+    B = lam_expanded * n / normalization_safe         # (D, B, Q, 3)
+    dist = g / normalization_safe[..., 0]             # (D, B, Q)
+    grad = A + dist[..., None] * B                    # (D, B, Q, 3)
+
+    return dist, grad, interpolated_uncertainty
 
 
 # ========================================================================
@@ -525,387 +704,387 @@ def torus_distance_gradient_masked(
 
 
 def generate_torus_mesh(center: np.ndarray, axis: np.ndarray, major_radius: float, minor_radius: float):
-	"""
-	Generate quad mesh for a single torus.
+    """
+    Generate quad mesh for a single torus.
 
-	Args:
-		center: (3,) center position
-		axis: (2,) axis in spherical coordinates (theta, phi)
-		major_radius: major radius R
-		minor_radius: minor radius r (can be negative)
+    Args:
+        center: (3,) center position
+        axis: (2,) axis in spherical coordinates (theta, phi)
+        major_radius: major radius R
+        minor_radius: minor radius r (can be negative)
 
-	Returns:
-		vertices: (major_res * minor_res, 3)
-		faces: (major_res * minor_res, 4) quad indices
-	"""
-	# Handle degenerate cases
-	if np.abs(minor_radius) < 1e-10 or np.abs(major_radius) < 1e-10:
-		# Degenerate torus - return empty mesh
-		return np.zeros((0, 3)), np.zeros((0, 4), dtype=np.int32)
+    Returns:
+        vertices: (major_res * minor_res, 3)
+        faces: (major_res * minor_res, 4) quad indices
+    """
+    # Handle degenerate cases
+    if np.abs(minor_radius) < 1e-10 or np.abs(major_radius) < 1e-10:
+        # Degenerate torus - return empty mesh
+        return np.zeros((0, 3)), np.zeros((0, 4), dtype=np.int32)
 
-	# major_res: number of segments around major circle
-	# minor_res: number of segments around minor circle
-	max_spacing = 0.1
-	min_res = 16  # for small point clouds (a few thousand points), use 16
-	max_res = 128
-	major_res = min(max(int(major_radius / max_spacing), min_res), max_res)
-	minor_res = min(max(int(minor_radius / max_spacing), min_res), max_res)
+    # major_res: number of segments around major circle
+    # minor_res: number of segments around minor circle
+    max_spacing = 0.1
+    min_res = 16  # for small point clouds (a few thousand points), use 16
+    max_res = 128
+    major_res = min(max(int(major_radius / max_spacing), min_res), max_res)
+    minor_res = min(max(int(minor_radius / max_spacing), min_res), max_res)
 
-	# Get torus axis as 3D vector
-	axis_3d = rotation_to_cartesian_jax(axis)
+    # Get torus axis as 3D vector
+    axis_3d = rotation_to_cartesian_jax(axis)
 
-	# Create two orthogonal vectors perpendicular to axis
-	v1, v2 = orthonormal_basis_with_rotation(axis_3d, 0.0)
+    # Create two orthogonal vectors perpendicular to axis
+    v1, v2 = orthonormal_basis_with_rotation(axis_3d, 0.0)
 
-	# Generate vertices
-	vertices = []
+    # Generate vertices
+    vertices = []
 
-	for i in range(major_res):
-		# Angle around major circle
-		theta = 2 * np.pi * i / major_res
+    for i in range(major_res):
+        # Angle around major circle
+        theta = 2 * np.pi * i / major_res
 
-		# Point on major circle
-		major_circle_point = center + major_radius * (np.cos(theta) * v1 + np.sin(theta) * v2)
+        # Point on major circle
+        major_circle_point = center + major_radius * (np.cos(theta) * v1 + np.sin(theta) * v2)
 
-		# Normal direction at this point on major circle (pointing away from center)
-		major_normal = np.cos(theta) * v1 + np.sin(theta) * v2
+        # Normal direction at this point on major circle (pointing away from center)
+        major_normal = np.cos(theta) * v1 + np.sin(theta) * v2
 
-		# Create local frame for minor circle
-		# tangent to major circle
-		major_tangent = -np.sin(theta) * v1 + np.cos(theta) * v2
+        # Create local frame for minor circle
+        # tangent to major circle
+        major_tangent = -np.sin(theta) * v1 + np.cos(theta) * v2
 
-		for j in range(minor_res):
-			# Angle around minor circle
-			phi = 2 * np.pi * j / minor_res
+        for j in range(minor_res):
+            # Angle around minor circle
+            phi = 2 * np.pi * j / minor_res
 
-			# Offset from major circle
-			# Note: minor_radius can be negative (changes which side of major circle)
-			offset = minor_radius * (np.cos(phi) * major_normal + np.sin(phi) * axis_3d)
+            # Offset from major circle
+            # Note: minor_radius can be negative (changes which side of major circle)
+            offset = minor_radius * (np.cos(phi) * major_normal + np.sin(phi) * axis_3d)
 
-			vertex = major_circle_point + offset
-			vertices.append(vertex)
+            vertex = major_circle_point + offset
+            vertices.append(vertex)
 
-	vertices = np.array(vertices)
+    vertices = np.array(vertices)
 
-	# Generate quad faces
-	faces = []
+    # Generate quad faces
+    faces = []
 
-	for i in range(major_res):
-		for j in range(minor_res):
-			v0 = i * minor_res + j
-			v1 = ((i + 1) % major_res) * minor_res + j
-			v2 = ((i + 1) % major_res) * minor_res + (j + 1) % minor_res
-			v3 = i * minor_res + (j + 1) % minor_res
+    for i in range(major_res):
+        for j in range(minor_res):
+            v0 = i * minor_res + j
+            v1 = ((i + 1) % major_res) * minor_res + j
+            v2 = ((i + 1) % major_res) * minor_res + (j + 1) % minor_res
+            v3 = i * minor_res + (j + 1) % minor_res
 
-			faces.append([v1, v2, v3, v0])
+            faces.append([v1, v2, v3, v0])
 
-	faces = np.array(faces, dtype=np.int32)
+    faces = np.array(faces, dtype=np.int32)
 
-	return vertices, faces
+    return vertices, faces
 
 
 def export_torus(center: np.ndarray, axis: np.ndarray, major_radius: float, minor_radius: float, save_filepath: str):
-	"""
-	Export a single torus.
+    """
+    Export a single torus.
 
-	Args:
-		center: (3,)
-		axis: (2,)
-		major_radius: scalar
-		minor_radius: scalar
-	"""
-	vertices, faces = generate_torus_mesh(center, axis, major_radius, minor_radius)
-	# export_OBJ(vertices, faces, filepath=save_filepath)
-	export_PLY(vertices, faces, filepath=save_filepath, binary=True)
+    Args:
+        center: (3,)
+        axis: (2,)
+        major_radius: scalar
+        minor_radius: scalar
+    """
+    vertices, faces = generate_torus_mesh(center, axis, major_radius, minor_radius)
+    # export_OBJ(vertices, faces, filepath=save_filepath)
+    export_PLY(vertices, faces, filepath=save_filepath, binary=True)
 
 
 def hsv_to_rgb(h, s, v):
-	"""
-	Convert HSV to RGB (matching the GLSL hsv2rgb function).
+    """
+    Convert HSV to RGB (matching the GLSL hsv2rgb function).
 
-	Args:
-		h, s, v: Hue [0,1], Saturation [0,1], Value [0,1]
+    Args:
+        h, s, v: Hue [0,1], Saturation [0,1], Value [0,1]
 
-	Returns:
-		(r, g, b) tuple in [0, 1]
-	"""
-	c = v * s
-	x = c * (1 - abs((h * 6) % 2 - 1))
-	m = v - c
+    Returns:
+        (r, g, b) tuple in [0, 1]
+    """
+    c = v * s
+    x = c * (1 - abs((h * 6) % 2 - 1))
+    m = v - c
 
-	if h < 1 / 6:
-		r, g, b = c, x, 0
-	elif h < 2 / 6:
-		r, g, b = x, c, 0
-	elif h < 3 / 6:
-		r, g, b = 0, c, x
-	elif h < 4 / 6:
-		r, g, b = 0, x, c
-	elif h < 5 / 6:
-		r, g, b = x, 0, c
-	else:
-		r, g, b = c, 0, x
+    if h < 1 / 6:
+        r, g, b = c, x, 0
+    elif h < 2 / 6:
+        r, g, b = x, c, 0
+    elif h < 3 / 6:
+        r, g, b = 0, c, x
+    elif h < 4 / 6:
+        r, g, b = 0, x, c
+    elif h < 5 / 6:
+        r, g, b = x, 0, c
+    else:
+        r, g, b = c, 0, x
 
-	return (r + m, g + m, b + m)
+    return (r + m, g + m, b + m)
 
 
 def torus_color(i):
-	"""
-	Compute the color of the i-th torus (matching shader logic).
+    """
+    Compute the color of the i-th torus (matching shader logic).
 
-	Args:
-		i: Torus index
+    Args:
+        i: Torus index
 
-	Returns:
-		(r, g, b) in [0, 255] as uint8
-	"""
-	incr = (1.0 + np.sqrt(5.0)) / 20.0
-	h = (i * incr) % 1.0
-	s = 0.5
-	v = 1.0
+    Returns:
+        (r, g, b) in [0, 255] as uint8
+    """
+    incr = (1.0 + np.sqrt(5.0)) / 20.0
+    h = (i * incr) % 1.0
+    s = 0.5
+    v = 1.0
 
-	r, g, b = hsv_to_rgb(h, s, v)
-	return np.array([int(r * 255), int(g * 255), int(b * 255)], dtype=np.uint8)
+    r, g, b = hsv_to_rgb(h, s, v)
+    return np.array([int(r * 255), int(g * 255), int(b * 255)], dtype=np.uint8)
 
 
 def export_tori(centers: np.ndarray, axes: np.ndarray, major_radii: float, minor_radii: float, save_filepath: str):
-	"""
-	Export a collection of torii in a single file.
+    """
+    Export a collection of torii in a single file.
 
-	Args:
-		center: (n_torii, 3)
-		axis: (n_torii, 2)
-		major_radius: (n_torii, )
-		minor_radius: (n_torii, )
-	"""
-	n_torii = len(centers)
+    Args:
+        center: (n_torii, 3)
+        axis: (n_torii, 2)
+        major_radius: (n_torii, )
+        minor_radius: (n_torii, )
+    """
+    n_torii = len(centers)
 
-	all_vertices = []
-	all_faces = []
-	all_colors = []
-	vertex_offset = 0
+    all_vertices = []
+    all_faces = []
+    all_colors = []
+    vertex_offset = 0
 
-	n_valid = 0
+    n_valid = 0
 
-	for i in range(n_torii):
-		# Check if torus is valid
-		is_valid = (
-			np.isfinite(centers[i]).all()
-			and np.isfinite(axes[i]).all()
-			and np.isfinite(major_radii[i])
-			and np.isfinite(minor_radii[i])
-			and np.abs(minor_radii[i]) > 1e-10
-			and np.abs(major_radii[i]) > 1e-10
-		)
+    for i in range(n_torii):
+        # Check if torus is valid
+        is_valid = (
+            np.isfinite(centers[i]).all()
+            and np.isfinite(axes[i]).all()
+            and np.isfinite(major_radii[i])
+            and np.isfinite(minor_radii[i])
+            and np.abs(minor_radii[i]) > 1e-10
+            and np.abs(major_radii[i]) > 1e-10
+        )
 
-		if not is_valid:
-			continue
+        if not is_valid:
+            continue
 
-		# Generate mesh for this torus
-		print(f'Generating torus mesh {i}...')
-		vertices, faces = generate_torus_mesh(centers[i], axes[i], major_radii[i], minor_radii[i])
+        # Generate mesh for this torus
+        print(f'Generating torus mesh {i}...')
+        vertices, faces = generate_torus_mesh(centers[i], axes[i], major_radii[i], minor_radii[i])
 
-		if len(vertices) == 0:
-			continue
+        if len(vertices) == 0:
+            continue
 
-		# Compute color for this torus (same color for all vertices of this torus)
-		color = torus_color(i)
-		vertex_colors = np.tile(color, (len(vertices), 1))
+        # Compute color for this torus (same color for all vertices of this torus)
+        color = torus_color(i)
+        vertex_colors = np.tile(color, (len(vertices), 1))
 
-		# Add to combined mesh with offset
-		all_vertices.append(vertices)
-		all_faces.append(faces + vertex_offset)
-		all_colors.append(vertex_colors)
+        # Add to combined mesh with offset
+        all_vertices.append(vertices)
+        all_faces.append(faces + vertex_offset)
+        all_colors.append(vertex_colors)
 
-		vertex_offset += len(vertices)
-		n_valid += 1
+        vertex_offset += len(vertices)
+        n_valid += 1
 
-	# Combine all meshes
-	print('Combining all torus mehses...')
-	if len(all_vertices) > 0:
-		all_vertices = np.vstack(all_vertices)
-		all_faces = np.vstack(all_faces)
-		all_colors = np.vstack(all_colors)
-		export_PLY_with_colors(all_vertices, all_faces, all_colors, save_filepath, binary=True)
-		print(f'Exported {n_valid}/{n_torii} torii to {save_filepath}')
-	else:
-		print(f'Warning: No valid torii found, empty mesh exported to {save_filepath}')
-		with open(save_filepath, 'w') as f:
-			f.write('# Empty mesh (no valid torii)\n')
+    # Combine all meshes
+    print('Combining all torus mehses...')
+    if len(all_vertices) > 0:
+        all_vertices = np.vstack(all_vertices)
+        all_faces = np.vstack(all_faces)
+        all_colors = np.vstack(all_colors)
+        export_PLY_with_colors(all_vertices, all_faces, all_colors, save_filepath, binary=True)
+        print(f'Exported {n_valid}/{n_torii} torii to {save_filepath}')
+    else:
+        print(f'Warning: No valid torii found, empty mesh exported to {save_filepath}')
+        with open(save_filepath, 'w') as f:
+            f.write('# Empty mesh (no valid torii)\n')
 
 
 def _export_tori_single(
-	centers: np.ndarray,
-	axes: np.ndarray,
-	major_radii: np.ndarray,
-	minor_radii: np.ndarray,
-	save_filepath: str,
-	global_index_offset: int = 0,
-	verbose: bool = True,
+    centers: np.ndarray,
+    axes: np.ndarray,
+    major_radii: np.ndarray,
+    minor_radii: np.ndarray,
+    save_filepath: str,
+    global_index_offset: int = 0,
+    verbose: bool = True,
 ) -> int:
-	"""
-	Export a collection of torii to a single file.
+    """
+    Export a collection of torii to a single file.
 
-	Args:
-		centers: (n_torii, 3)
-		axes: (n_torii, 2)
-		major_radii: (n_torii,)
-		minor_radii: (n_torii,)
-		save_filepath: output filepath
-		global_index_offset: offset for global indexing (for consistent colors across chunks)
-		verbose: print progress
+    Args:
+        centers: (n_torii, 3)
+        axes: (n_torii, 2)
+        major_radii: (n_torii,)
+        minor_radii: (n_torii,)
+        save_filepath: output filepath
+        global_index_offset: offset for global indexing (for consistent colors across chunks)
+        verbose: print progress
 
-	Returns:
-		Number of valid torii exported
-	"""
-	n_torii = len(centers)
+    Returns:
+        Number of valid torii exported
+    """
+    n_torii = len(centers)
 
-	all_vertices = []
-	all_faces = []
-	all_colors = []
-	vertex_offset = 0
-	n_valid = 0
+    all_vertices = []
+    all_faces = []
+    all_colors = []
+    vertex_offset = 0
+    n_valid = 0
 
-	for i in range(n_torii):
-		# Check if torus is valid
-		is_valid = (
-			np.isfinite(centers[i]).all()
-			and np.isfinite(axes[i]).all()
-			and np.isfinite(major_radii[i])
-			and np.isfinite(minor_radii[i])
-			and np.abs(minor_radii[i]) > 1e-10
-			and np.abs(major_radii[i]) > 1e-10
-		)
+    for i in range(n_torii):
+        # Check if torus is valid
+        is_valid = (
+            np.isfinite(centers[i]).all()
+            and np.isfinite(axes[i]).all()
+            and np.isfinite(major_radii[i])
+            and np.isfinite(minor_radii[i])
+            and np.abs(minor_radii[i]) > 1e-10
+            and np.abs(major_radii[i]) > 1e-10
+        )
 
-		if not is_valid:
-			continue
+        if not is_valid:
+            continue
 
-		# Generate mesh for this torus
-		vertices, faces = generate_torus_mesh(centers[i], axes[i], major_radii[i], minor_radii[i])
+        # Generate mesh for this torus
+        vertices, faces = generate_torus_mesh(centers[i], axes[i], major_radii[i], minor_radii[i])
 
-		if len(vertices) == 0:
-			continue
+        if len(vertices) == 0:
+            continue
 
-		# Compute color using global index for consistency across chunks
-		global_index = global_index_offset + i
-		color = torus_color(global_index)
-		vertex_colors = np.tile(color, (len(vertices), 1))
+        # Compute color using global index for consistency across chunks
+        global_index = global_index_offset + i
+        color = torus_color(global_index)
+        vertex_colors = np.tile(color, (len(vertices), 1))
 
-		# Add to combined mesh with offset
-		all_vertices.append(vertices)
-		all_faces.append(faces + vertex_offset)
-		all_colors.append(vertex_colors)
+        # Add to combined mesh with offset
+        all_vertices.append(vertices)
+        all_faces.append(faces + vertex_offset)
+        all_colors.append(vertex_colors)
 
-		vertex_offset += len(vertices)
-		n_valid += 1
+        vertex_offset += len(vertices)
+        n_valid += 1
 
-	# Combine and export
-	if len(all_vertices) > 0:
-		all_vertices = np.vstack(all_vertices)
-		all_faces = np.vstack(all_faces)
-		all_colors = np.vstack(all_colors)
-		export_PLY_with_colors(all_vertices, all_faces, all_colors, save_filepath, binary=True)
-		if verbose:
-			print(f'Exported {n_valid}/{n_torii} torii to {save_filepath}')
-	else:
-		if verbose:
-			print(f'Warning: No valid torii found, skipping {save_filepath}')
+    # Combine and export
+    if len(all_vertices) > 0:
+        all_vertices = np.vstack(all_vertices)
+        all_faces = np.vstack(all_faces)
+        all_colors = np.vstack(all_colors)
+        export_PLY_with_colors(all_vertices, all_faces, all_colors, save_filepath, binary=True)
+        if verbose:
+            print(f'Exported {n_valid}/{n_torii} torii to {save_filepath}')
+    else:
+        if verbose:
+            print(f'Warning: No valid torii found, skipping {save_filepath}')
 
-	return n_valid
+    return n_valid
 
 
 def export_tori_chunked(
-	centers: np.ndarray,
-	axes: np.ndarray,
-	major_radii: np.ndarray,
-	minor_radii: np.ndarray,
-	save_filepath: str,
-	chunk_size: int = 1_000_000,
-	verbose: bool = True,
+    centers: np.ndarray,
+    axes: np.ndarray,
+    major_radii: np.ndarray,
+    minor_radii: np.ndarray,
+    save_filepath: str,
+    chunk_size: int = 1_000_000,
+    verbose: bool = True,
 ) -> List[str]:
-	"""
-	Export a collection of torii in chunks, with each chunk saved to a separate file.
+    """
+    Export a collection of torii in chunks, with each chunk saved to a separate file.
 
-	Args:
-		centers: (n_torii, 3) torus centers
-		axes: (n_torii, 2) torus axes in spherical coordinates
-		major_radii: (n_torii,) torus major radii
-		minor_radii: (n_torii,) torus minor radii
-		save_filepath: base filepath for output (e.g., "output/torii.ply")
-					   chunks will be saved as "output/torii_chunk0.ply", etc.
-		chunk_size: number of torii per chunk (default 1M)
-		verbose: print progress information
+    Args:
+        centers: (n_torii, 3) torus centers
+        axes: (n_torii, 2) torus axes in spherical coordinates
+        major_radii: (n_torii,) torus major radii
+        minor_radii: (n_torii,) torus minor radii
+        save_filepath: base filepath for output (e.g., "output/torii.ply")
+                       chunks will be saved as "output/torii_chunk0.ply", etc.
+        chunk_size: number of torii per chunk (default 1M)
+        verbose: print progress information
 
-	Returns:
-		List of output filepaths that were created
-	"""
-	n_torii = len(centers)
-	print(f'# torii: {n_torii}')
+    Returns:
+        List of output filepaths that were created
+    """
+    n_torii = len(centers)
+    print(f'# torii: {n_torii}')
 
-	# Parse base filepath
-	if save_filepath.endswith('.ply'):
-		base_path = save_filepath[:-4]
-	else:
-		base_path = save_filepath
+    # Parse base filepath
+    if save_filepath.endswith('.ply'):
+        base_path = save_filepath[:-4]
+    else:
+        base_path = save_filepath
 
-	# # If small enough, export in one file
-	# if n_torii <= chunk_size:
-	# 	output_files = []
-	# 	filepath = f"{base_path}.ply"
-	# 	n_valid = _export_tori_single(
-	# 		centers, axes, major_radii, minor_radii,
-	# 		filepath, global_index_offset=0, verbose=verbose
-	# 	)
-	# 	if n_valid > 0:
-	# 		output_files.append(filepath)
-	# 	return output_files
+    # # If small enough, export in one file
+    # if n_torii <= chunk_size:
+    #     output_files = []
+    #     filepath = f"{base_path}.ply"
+    #     n_valid = _export_tori_single(
+    #         centers, axes, major_radii, minor_radii,
+    #         filepath, global_index_offset=0, verbose=verbose
+    #     )
+    #     if n_valid > 0:
+    #         output_files.append(filepath)
+    #     return output_files
 
-	# Process in chunks
-	n_chunks = (n_torii + chunk_size - 1) // chunk_size
+    # Process in chunks
+    n_chunks = (n_torii + chunk_size - 1) // chunk_size
 
-	if verbose:
-		print(f'Exporting {n_torii:,} torii in {n_chunks} chunks of up to {chunk_size:,} each...')
+    if verbose:
+        print(f'Exporting {n_torii:,} torii in {n_chunks} chunks of up to {chunk_size:,} each...')
 
-	output_files = []
-	total_valid = 0
+    output_files = []
+    total_valid = 0
 
-	for chunk_idx in range(n_chunks):
-		start = chunk_idx * chunk_size
-		end = min(start + chunk_size, n_torii)
+    for chunk_idx in range(n_chunks):
+        start = chunk_idx * chunk_size
+        end = min(start + chunk_size, n_torii)
 
-		if verbose:
-			progress = (chunk_idx + 1) / n_chunks * 100
-			print(f'  Chunk {chunk_idx}/{n_chunks - 1} (torii {start:,}-{end - 1:,}, {progress:.1f}%)...')
+        if verbose:
+            progress = (chunk_idx + 1) / n_chunks * 100
+            print(f'  Chunk {chunk_idx}/{n_chunks - 1} (torii {start:,}-{end - 1:,}, {progress:.1f}%)...')
 
-		# Extract chunk data
-		centers_chunk = centers[start:end]
-		axes_chunk = axes[start:end]
-		major_chunk = major_radii[start:end]
-		minor_chunk = minor_radii[start:end]
+        # Extract chunk data
+        centers_chunk = centers[start:end]
+        axes_chunk = axes[start:end]
+        major_chunk = major_radii[start:end]
+        minor_chunk = minor_radii[start:end]
 
-		# Export chunk with global index offset for consistent coloring
-		filepath = f'{base_path}_chunk{chunk_idx}.ply'
-		n_valid = _export_tori_single(
-			centers_chunk, axes_chunk, major_chunk, minor_chunk, filepath, global_index_offset=start, verbose=False
-		)
+        # Export chunk with global index offset for consistent coloring
+        filepath = f'{base_path}_chunk{chunk_idx}.ply'
+        n_valid = _export_tori_single(
+            centers_chunk, axes_chunk, major_chunk, minor_chunk, filepath, global_index_offset=start, verbose=False
+        )
 
-		if n_valid > 0:
-			output_files.append(filepath)
-			total_valid += n_valid
-			if verbose:
-				print(f'	Exported {n_valid:,} valid torii to {filepath}')
-		else:
-			if verbose:
-				print(f'	No valid torii in chunk {chunk_idx}, skipping file creation')
+        if n_valid > 0:
+            output_files.append(filepath)
+            total_valid += n_valid
+            if verbose:
+                print(f'    Exported {n_valid:,} valid torii to {filepath}')
+        else:
+            if verbose:
+                print(f'    No valid torii in chunk {chunk_idx}, skipping file creation')
 
-		# Free memory
-		del centers_chunk, axes_chunk, major_chunk, minor_chunk
-		gc.collect()
+        # Free memory
+        del centers_chunk, axes_chunk, major_chunk, minor_chunk
+        gc.collect()
 
-	if verbose:
-		print(f'  Done. Exported {total_valid:,}/{n_torii:,} valid torii to {len(output_files)} files.')
+    if verbose:
+        print(f'  Done. Exported {total_valid:,}/{n_torii:,} valid torii to {len(output_files)} files.')
 
-	return output_files
+    return output_files
 
 
 # ========================================================================
@@ -914,513 +1093,588 @@ def export_tori_chunked(
 
 
 class TransformerBlock(nnx.Module):
-	"""
-	Transformer block using Flax built-in modules.
-	"""
+    """
+    Transformer block using Flax built-in modules.
+    """
 
-	def __init__(self, embed_dim: int, n_heads: int, mlp_dim: int, dropout_rate: float = 0.0, *, rngs: nnx.Rngs):
-		self.attention = nnx.MultiHeadAttention(
-			num_heads=n_heads,
-			in_features=embed_dim,
-			qkv_features=embed_dim,
-			out_features=embed_dim,
-			decode=False,
-			rngs=rngs,
-		)
+    def __init__(self, embed_dim: int, n_heads: int, mlp_dim: int, dropout_rate: float = 0.0, *, rngs: nnx.Rngs):
+        self.attention = nnx.MultiHeadAttention(
+            num_heads=n_heads,
+            in_features=embed_dim,
+            qkv_features=embed_dim,
+            out_features=embed_dim,
+            decode=False,
+            rngs=rngs,
+        )
 
-		# feed-forward network
-		self.ffn = nnx.Sequential(
-			nnx.Linear(embed_dim, mlp_dim, rngs=rngs),
-			nnx.gelu,
-			nnx.Dropout(rate=dropout_rate, rngs=rngs),
-			nnx.Linear(mlp_dim, embed_dim, rngs=rngs),
-			nnx.Dropout(rate=dropout_rate, rngs=rngs),
-		)
+        # feed-forward network
+        self.ffn = nnx.Sequential(
+            nnx.Linear(embed_dim, mlp_dim, rngs=rngs),
+            nnx.gelu,
+            nnx.Dropout(rate=dropout_rate, rngs=rngs),
+            nnx.Linear(mlp_dim, embed_dim, rngs=rngs),
+            nnx.Dropout(rate=dropout_rate, rngs=rngs),
+        )
 
-		# layer normalization
-		self.norm1 = nnx.LayerNorm(embed_dim, rngs=rngs)
-		self.norm2 = nnx.LayerNorm(embed_dim, rngs=rngs)
-		self.dropout = nnx.Dropout(rate=dropout_rate, rngs=rngs)
+        # layer normalization
+        self.norm1 = nnx.LayerNorm(embed_dim, rngs=rngs)
+        self.norm2 = nnx.LayerNorm(embed_dim, rngs=rngs)
+        self.dropout = nnx.Dropout(rate=dropout_rate, rngs=rngs)
 
-	def __call__(self, x: jax.Array) -> jax.Array:
-		# Self-attention block
-		residual = x
-		x = self.norm1(x)
-		x = self.attention(x)
-		x = self.dropout(x)
-		x = residual + x
+    def __call__(self, x: jax.Array) -> jax.Array:
+        # Self-attention block
+        residual = x
+        x = self.norm1(x)
+        x = self.attention(x)
+        x = self.dropout(x)
+        x = residual + x
 
-		# Feed-forward block
-		residual = x
-		x = self.norm2(x)
-		x = self.ffn(x)
-		x = residual + x
+        # Feed-forward block
+        residual = x
+        x = self.norm2(x)
+        x = self.ffn(x)
+        x = residual + x
 
-		return x
+        return x
 
 
 class InputFeatures(nnx.Module):
-	"""
-	Turn a neighborhood (point positions & their normals) to the input features to be fed into the neural network.
-	"""
+    """
+    Turn a neighborhood (point positions & their normals) to the input features to be fed into the neural network.
+    """
 
-	def __init__(self, output_dim: int, n_freq: int = 0, *, rngs: nnx.Rngs):
-		# Input features: local coordinates (3), normals in local coordinates (3)
-		input_dim = 6
+    def __init__(self, output_dim: int, n_freq: int = 0, *, rngs: nnx.Rngs):
+        # Input features: local coordinates (3), normals in local coordinates (3)
+        input_dim = 6
 
-		self.n_freq = n_freq
-		if n_freq > 0:
-			pos_encoding_dim = 3 * (2 * n_freq + 1)
-			input_dim = pos_encoding_dim + 3
+        self.n_freq = n_freq
+        if n_freq > 0:
+            pos_encoding_dim = 3 * (2 * n_freq + 1)
+            input_dim = pos_encoding_dim + 3
 
-		# A linear projection simply to match transformer dimension
-		self.mlp = nnx.Sequential(
-			nnx.Linear(input_dim, 2*output_dim, rngs=rngs),
-			nnx.relu,
-			nnx.Linear(2*output_dim, output_dim, rngs=rngs),
-			nnx.LayerNorm(output_dim, rngs=rngs),  # LayerNorm seems to really help here
-		)
+        # A linear projection simply to match transformer dimension
+        self.mlp = nnx.Sequential(
+            nnx.Linear(input_dim, output_dim, rngs=rngs),
+            #nnx.relu,
+            #nnx.Linear(2*output_dim, output_dim, rngs=rngs),
+            nnx.LayerNorm(output_dim, rngs=rngs),  # LayerNorm seems to really help here
+        )
 
-		self.key = jax.random.PRNGKey(57)
+        self.key = jax.random.PRNGKey(57)
 
-	def __call__(
-		self,
-		positions: jax.Array,  # [batch, k, 3]
-		normals: jax.Array,  # [batch, k, 3]
-	) -> jax.Array:
-		"""
-		Compute geometric features relative to first point (center).
+    def __call__(
+        self,
+        positions: jax.Array,  # [batch, k, 3]
+        normals: jax.Array,  # [batch, k, 3]
+    ) -> jax.Array:
+        """
+        Compute geometric features relative to first point (center).
 
-		Returns:
-			[batch, k, output_dim] geometric encodings
-		"""
-		batch_size, k, _ = positions.shape
+        Returns:
+            [batch, k, output_dim] geometric encodings
+        """
+        batch_size, k, _ = positions.shape
 
-		norms = jnp.linalg.norm(normals, axis=-1, keepdims=True)  # [batch, k, 1]
-		normalized_normals = normals / jnp.maximum(norms, NAN_EPSILON)  # [batch, k, 3]
+        norms = jnp.linalg.norm(normals, axis=-1, keepdims=True)  # [batch, k, 1]
+        normalized_normals = normals / jnp.maximum(norms, NAN_EPSILON)  # [batch, k, 3]
 
-		# Center point (index 0)
-		center_normal = normalized_normals[:, 0:1, :]  # [batch, 1, 3]
+        # Center point (index 0)
+        center_normal = normalized_normals[:, 0:1, :]  # [batch, 1, 3]
 
-		# Regularization: scale neighborhood according to median_j |p_i - p_j|
-		diff_vectors = positions - positions[:, 0:1, :]  # [batch, k, 3]
-		distances = jnp.sqrt(jnp.sum(diff_vectors * diff_vectors, axis=-1))  # [batch, k]
-		median = jnp.median(distances, axis=-1)  # [batch, ]
-		normalized_positions = positions / median[:, None, None]  # [batch, k, 3]
+        # Regularization: scale neighborhood according to median_j |p_i - p_j|
+        diff_vectors = positions - positions[:, 0:1, :]  # [batch, k, 3]
+        distances = jnp.sqrt(jnp.sum(diff_vectors * diff_vectors, axis=-1))  # [batch, k]
+        median = jnp.median(distances, axis=-1)  # [batch, ]
+        normalized_positions = positions / median[:, None, None]  # [batch, k, 3]
 
-		# The following block of code is copied from local_coordinates() above, because we also need the orthonormal basis.
-		center_point = normalized_positions[:, 0:1, :]  # [batch, 1, 3]
-		s_hat, t_hat = orthonormal_basis_with_rotation(center_normal, 0.0)
+        # The following block of code is copied from local_coordinates() above, because we also need the orthonormal basis.
+        center_point = normalized_positions[:, 0:1, :]  # [batch, 1, 3]
+        s_hat, t_hat = orthonormal_basis_with_rotation(center_normal, 0.0)
 
-		# Encode relative positions in local frame as (s, t, Q(s, t)) tuples.
-		diff_vectors = normalized_positions - center_point  # [batch, k, 3]
-		heights = jnp.sum(diff_vectors * center_normal, axis=-1, keepdims=True)  # [batch, k, 1]
-		S = jnp.sum(diff_vectors * s_hat, axis=-1, keepdims=True)  # [batch, k, 1]
-		T = jnp.sum(diff_vectors * t_hat, axis=-1, keepdims=True)  # [batch, k, 1]
-		coordinates = jnp.concatenate([S, T, heights], axis=-1)  # [batch, k, 3]
+        # Encode relative positions in local frame as (s, t, Q(s, t)) tuples.
+        diff_vectors = normalized_positions - center_point  # [batch, k, 3]
+        heights = jnp.sum(diff_vectors * center_normal, axis=-1, keepdims=True)  # [batch, k, 1]
+        S = jnp.sum(diff_vectors * s_hat, axis=-1, keepdims=True)  # [batch, k, 1]
+        T = jnp.sum(diff_vectors * t_hat, axis=-1, keepdims=True)  # [batch, k, 1]
+        coordinates = jnp.concatenate([S, T, heights], axis=-1)  # [batch, k, 3]
 
-		# Encode normals in local frame.
-		S = jnp.sum(normalized_normals * s_hat, axis=-1, keepdims=True)  # [batch, k, 1]
-		T = jnp.sum(normalized_normals * t_hat, axis=-1, keepdims=True)  # [batch, k, 1]
-		N = jnp.sum(normalized_normals * center_normal, axis=-1, keepdims=True)  # [batch, k, 1]
-		local_normals = jnp.concatenate([S, T, N], axis=-1)  # [batch, k, 3]
+        # Encode normals in local frame.
+        S = jnp.sum(normalized_normals * s_hat, axis=-1, keepdims=True)  # [batch, k, 1]
+        T = jnp.sum(normalized_normals * t_hat, axis=-1, keepdims=True)  # [batch, k, 1]
+        N = jnp.sum(normalized_normals * center_normal, axis=-1, keepdims=True)  # [batch, k, 1]
+        local_normals = jnp.concatenate([S, T, N], axis=-1)  # [batch, k, 3]
 
-		# [local coordinates (3), normals in local coordinates (3)]
-		geometric_features = jnp.concatenate([coordinates, local_normals], axis=-1)  # [batch, k, input_dim]
+        # [local coordinates (3), normals in local coordinates (3)]
+        geometric_features = jnp.concatenate([coordinates, local_normals], axis=-1)  # [batch, k, input_dim]
 
-		return self.mlp(geometric_features), median
+        return self.mlp(geometric_features), median
+
+
+class InputFeaturesWithUncertainty(nnx.Module):
+    """
+    Turn a neighborhood (point positions & their normals) to the input features to be fed into the neural network.
+    """
+
+    def __init__(self, output_dim: int, n_freq: int = 0, *, rngs: nnx.Rngs):
+        # Input features: local coordinates (3), normals in local coordinates (3)
+        input_dim = 6
+
+        self.n_freq = n_freq
+        if n_freq > 0:
+            pos_encoding_dim = 3 * (2 * n_freq + 1)
+            input_dim = pos_encoding_dim + 3
+
+        # A linear projection simply to match transformer dimension
+        self.mlp = nnx.Sequential(
+            nnx.Linear(input_dim, 4*output_dim, rngs=rngs),
+            nnx.LayerNorm(4*output_dim, rngs=rngs),  # LayerNorm seems to really help here
+            nnx.relu,
+            nnx.Linear(4*output_dim, output_dim, rngs=rngs),
+            nnx.LayerNorm(output_dim, rngs=rngs),  # LayerNorm seems to really help here
+        )
+
+        self.key = jax.random.PRNGKey(57)
+
+    def __call__(
+        self,
+        positions: jax.Array,  # [batch, k, 3]
+        normals: jax.Array,  # [batch, k, 3]
+    ) -> jax.Array:
+        """
+        Compute geometric features relative to first point (center).
+
+        Returns:
+            [batch, k, output_dim] geometric encodings
+        """
+        n_devices, batch_size, k, _ = positions.shape
+
+        norms = jnp.linalg.norm(normals, axis=-1, keepdims=True)  # [device, batch, k, 1]
+        normalized_normals = normals / jnp.maximum(norms, NAN_EPSILON)  # [device, batch, k, 3]
+
+        # Center point (index 0)
+        center_normal = normalized_normals[:, :, 0:1, :]  # [device, batch, 1, 3]
+
+        # Regularization: scale neighborhood according to median_j |p_i - p_j|
+        diff_vectors = positions - positions[:, :, 0:1, :]  # [device, batch, k, 3]
+        distances = jnp.sqrt(jnp.sum(diff_vectors * diff_vectors, axis=-1))  # [batch, k]
+        median = jnp.median(distances, axis=-1)  # [batch, ]
+        normalized_positions = positions / median[:, :, None, None]  # [device, batch, k, 3]
+
+        # The following block of code is copied from local_coordinates() above, because we also need the orthonormal basis.
+        center_point = normalized_positions[:, :, 0:1, :]  # [device, batch, 1, 3]
+        s_hat, t_hat = orthonormal_basis_with_rotation(center_normal, 0.0)
+
+        # Encode relative positions in local frame as (s, t, Q(s, t)) tuples.
+        diff_vectors = normalized_positions - center_point  # [device, batch, k, 3]
+        heights = jnp.sum(diff_vectors * center_normal, axis=-1, keepdims=True)  # [device, batch, k, 1]
+        S = jnp.sum(diff_vectors * s_hat, axis=-1, keepdims=True)  # [device, batch, k, 1]
+        T = jnp.sum(diff_vectors * t_hat, axis=-1, keepdims=True)  # [device, batch, k, 1]
+        coordinates = jnp.concatenate([S, T, heights], axis=-1)  # [device, batch, k, 3]
+
+        # Encode normals in local frame.
+        S = jnp.sum(normalized_normals * s_hat, axis=-1, keepdims=True)  # [device, batch, k, 1]
+        T = jnp.sum(normalized_normals * t_hat, axis=-1, keepdims=True)  # [device, batch, k, 1]
+        N = jnp.sum(normalized_normals * center_normal, axis=-1, keepdims=True)  # [device, batch, k, 1]
+        local_normals = jnp.concatenate([S, T, N], axis=-1)  # [device, batch, k, 3]
+
+        # [local coordinates (3), normals in local coordinates (3)]
+        geometric_features = jnp.concatenate([coordinates, local_normals], axis=-1)  # [device, batch, k, input_dim]
+
+        return self.mlp(geometric_features), median
 
 
 class FundamentalFormPredictor(nnx.Module):
-	def __init__(
-		self,
-		embed_dim: int = 128,
-		n_freq: int = 0,
-		n_layers: int = 4,
-		n_heads: int = 4,
-		mlp_dim: int = 256,
-		dropout_rate: float = 0.0,
-		*,
-		rngs: nnx.Rngs,
-	):
-		"""
-		Args: Parameters for each TransformerBlock.
-			n_layers: Number of TransformerBlocks.
-		"""
+    def __init__(
+        self,
+        embed_dim: int = 128,
+        n_freq: int = 0,
+        n_layers: int = 4,
+        n_heads: int = 4,
+        mlp_dim: int = 256,
+        dropout_rate: float = 0.0,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        """
+        Args: Parameters for each TransformerBlock.
+            n_layers: Number of TransformerBlocks.
+        """
 
-		self.input_encoder = InputFeatures(embed_dim, n_freq=n_freq, rngs=rngs)
+        self.input_encoder = InputFeatures(embed_dim, n_freq=n_freq, rngs=rngs)
 
-		self.blocks = nnx.List(
-			[TransformerBlock(embed_dim, n_heads, mlp_dim, dropout_rate, rngs=rngs) for _ in range(n_layers)]
-		)
+        self.blocks = nnx.List(
+            [TransformerBlock(embed_dim, n_heads, mlp_dim, dropout_rate, rngs=rngs) for _ in range(n_layers)]
+        )
 
-		self.final_norm = nnx.LayerNorm(embed_dim, rngs=rngs)
+        self.final_norm = nnx.LayerNorm(embed_dim, rngs=rngs)
 
-		# Projection
-		# (a00, a01, a10, a11, a02, a20)
-		self.mlp = nnx.Sequential(
-			nnx.Linear(
-				embed_dim,
-				6,
-				kernel_init=nnx.initializers.zeros_init(),
-				# bias_init=nnx.initializers.ones_init(),
-				bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5])),
-				rngs=rngs,
-			),
-		)
+        # Projection
+        # (a00, a01, a10, a11, a02, a20)
+        self.mlp = nnx.Sequential(
+            nnx.Linear(
+                embed_dim,
+                6,
+                kernel_init=nnx.initializers.zeros_init(),
+                # bias_init=nnx.initializers.ones_init(),
+                bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5])),
+                rngs=rngs,
+            ),
+        )
 
-	@nnx.jit
-	def __call__(self, positions: jax.Array, normals: jax.Array) -> jax.Array:
-		"""
-		Args:
-			positions, normals: [batch, k, 3] representing a neighborhood of size k; the first point (index 0) is the center
+    @nnx.jit
+    def __call__(self, positions: jax.Array, normals: jax.Array) -> jax.Array:
+        """
+        Args:
+            positions, normals: [batch, k, 3] representing a neighborhood of size k; the first point (index 0) is the center
 
-		Returns:
-			coefficients: [batch, 6] (a00, a01, a10, a11, a02, a20)
-		"""
-		batch_size, k, d = positions.shape
+        Returns:
+            coefficients: [batch, 6] (a00, a01, a10, a11, a02, a20)
+        """
+        batch_size, k, d = positions.shape
 
-		# input_features: [batch, k, embed_dim]
-		# scale: [batch, ]
-		input_features, scale = self.input_encoder(positions, normals)
-		x = input_features
+        # input_features: [batch, k, embed_dim]
+        # scale: [batch, ]
+        input_features, scale = self.input_encoder(positions, normals)
+        x = input_features
 
-		# Apply transformer blocks
-		for block in self.blocks:
-			x = block(x)
+        # Apply transformer blocks
+        for block in self.blocks:
+            x = block(x)
 
-		x = self.final_norm(x)  # [batch, k, embed_dim]
+        x = self.final_norm(x)  # [batch, k, embed_dim]
 
-		# Extract center point
-		x = x[:, 0, :]  # [batch, embed_dim]
+        # Extract center point
+        x = x[:, 0, :]  # [batch, embed_dim]
 
-		# Predict form coefficients
-		coeffs = self.mlp(x)  # [batch, 6]
+        # Predict form coefficients
+        coeffs = self.mlp(x)  # [batch, 6]
 
-		# Scale back to original space
-		coeffs = jnp.stack(
-			[
-				coeffs[:, 0] * scale,  # a00
-				coeffs[:, 1],  # a01
-				coeffs[:, 2],  # a10
-				coeffs[:, 3] / scale,  # a11
-				coeffs[:, 4] / scale,  # a02
-				coeffs[:, 5] / scale,  # a20
-			],
-			axis=-1,
-		)
+        # Scale back to original space
+        coeffs = jnp.stack(
+            [
+                coeffs[:, 0] * scale,  # a00
+                coeffs[:, 1],  # a01
+                coeffs[:, 2],  # a10
+                coeffs[:, 3] / scale,  # a11
+                coeffs[:, 4] / scale,  # a02
+                coeffs[:, 5] / scale,  # a20
+            ],
+            axis=-1,
+        )
 
-		return coeffs
+        return coeffs
 
-	def precompute_coefficients(self, points, normals, k_neighbors, outliers=np.array([])):
-		nnx.eval_mode(self)
-		# Generate neighborhoods
-		indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
+    def precompute_coefficients(self, points, normals, k_neighbors, outliers=np.array([])):
+        nnx.eval_mode(self)
+        # Generate neighborhoods
+        indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
 
-		# Run forward evaluation.
-		predicted_coefficients = self(points[indices], normals[indices])  # (|P|, 6)
+        # Run forward evaluation.
+        predicted_coefficients = self(points[indices], normals[indices])  # (|P|, 6)
 
-		return predicted_coefficients
+        return predicted_coefficients
 
-	def precompute_coefficients_in_chunks(self, points, normals, k_neighbors, chunk_size=50000, outliers=np.array([]), use_linear_least_squares: bool = False):
-		"""
-		Process in chunks to avoid GPU memory issues
-		"""
-		nnx.eval_mode(self)
+    def precompute_coefficients_in_chunks(self, points, normals, k_neighbors, chunk_size=50000, outliers=np.array([]), use_linear_least_squares: bool = False):
+        """
+        Process in chunks to avoid GPU memory issues
+        """
+        nnx.eval_mode(self)
 
-		n_points = points.shape[0]
-		print(f'Processing {n_points} points in chunks of {chunk_size}...')
+        n_points = points.shape[0]
+        print(f'Processing {n_points} points in chunks of {chunk_size}...')
 
-		# Generate patches
-		t0 = time.time()
-		indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
-		t1 = time.time()
-		print(f'  get_neighbors: {t1 - t0:.2f}s')
+        # Generate patches
+        t0 = time.time()
+        indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
+        t1 = time.time()
+        print(f'  get_neighbors: {t1 - t0:.2f}s')
 
-		# Allocate output array
-		all_coefficients = []
+        # Allocate output array
+        all_coefficients = []
 
-		# Process in chunks
-		n_chunks = (n_points + chunk_size - 1) // chunk_size
-		t0 = time.time()
+        # Process in chunks
+        n_chunks = (n_points + chunk_size - 1) // chunk_size
+        t0 = time.time()
 
-		if use_linear_least_squares:
-			jit_least_squares = jax.jit(least_squares_coefficients)
+        if use_linear_least_squares:
+            jit_least_squares = jax.jit(least_squares_coefficients)
 
-		for chunk_idx in range(n_chunks):
-			start_idx = chunk_idx * chunk_size
-			end_idx = min(start_idx + chunk_size, n_points)
+        for chunk_idx in range(n_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min(start_idx + chunk_size, n_points)
 
-			# Extract chunk
-			chunk_indices = indices[start_idx:end_idx]  # (chunk_size, k)
-			chunk_points = points[chunk_indices]  # (chunk_size, k, 3)
-			chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
+            # Extract chunk
+            chunk_indices = indices[start_idx:end_idx]  # (chunk_size, k)
+            chunk_points = points[chunk_indices]  # (chunk_size, k, 3)
+            chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
 
-			if use_linear_least_squares:
-				chunk_coeffs = jit_least_squares(chunk_points, chunk_normals)
+            if use_linear_least_squares:
+                chunk_coeffs = jit_least_squares(chunk_points, chunk_normals)
 
-			else:
-				# Forward pass for this chunk
-				chunk_coeffs = self(chunk_points, chunk_normals)
+            else:
+                # Forward pass for this chunk
+                chunk_coeffs = self(chunk_points, chunk_normals)
 
-			# Wait for GPU to finish and transfer to CPU
-			chunk_coeffs_cpu = np.array(chunk_coeffs.block_until_ready())
-			all_coefficients.append(chunk_coeffs_cpu)
+            # Wait for GPU to finish and transfer to CPU
+            chunk_coeffs_cpu = np.array(chunk_coeffs.block_until_ready())
+            all_coefficients.append(chunk_coeffs_cpu)
 
-			# Clear JAX cache for this chunk
-			del chunk_coeffs
+            # Clear JAX cache for this chunk
+            del chunk_coeffs
 
-			if (chunk_idx + 1) % 10 == 0:
-				print(f'	{chunk_idx + 1}/{n_chunks} chunks processed')
+            if (chunk_idx + 1) % 10 == 0:
+                print(f'    {chunk_idx + 1}/{n_chunks} chunks processed')
 
-		t1 = time.time()
-		print(f'  Coefficient prediction (chunked): {t1 - t0:.2f}s')
+        t1 = time.time()
+        print(f'  Coefficient prediction (chunked): {t1 - t0:.2f}s')
 
-		# Concatenate all chunks
-		predicted_coefficients = np.concatenate(all_coefficients, axis=0)
+        # Concatenate all chunks
+        predicted_coefficients = np.concatenate(all_coefficients, axis=0)
 
-		return predicted_coefficients
+        return predicted_coefficients
 
-	@staticmethod
-	def load_saved_model(filepath: str):
-		"""
-		Given the filepath where weights are saved, return the model and its parameters.
-		"""
-		with open(filepath, 'rb') as f:
-			saved_data = pickle.load(f)
+    @staticmethod
+    def load_saved_model(filepath: str):
+        """
+        Given the filepath where weights are saved, return the model and its parameters.
+        """
+        with open(filepath, 'rb') as f:
+            saved_data = pickle.load(f)
 
-		n_freq = saved_data['n_freq'] if 'n_freq' in saved_data else 0
+        n_freq = saved_data['n_freq'] if 'n_freq' in saved_data else 0
 
-		loaded_model = FundamentalFormPredictor(
-			embed_dim=saved_data['embed_dim'],
-			n_freq=n_freq,
-			n_heads=saved_data['n_heads'],
-			n_layers=saved_data['n_layers'],
-			mlp_dim=saved_data['mlp_dim'],
-			dropout_rate=saved_data['dropout_rate'],  # not used in eval mode
-			rngs=nnx.Rngs(0),  # not used in eval mode
-		)
+        loaded_model = FundamentalFormPredictor(
+            embed_dim=saved_data['embed_dim'],
+            n_freq=n_freq,
+            n_heads=saved_data['n_heads'],
+            n_layers=saved_data['n_layers'],
+            mlp_dim=saved_data['mlp_dim'],
+            dropout_rate=saved_data['dropout_rate'],  # not used in eval mode
+            rngs=nnx.Rngs(0),  # not used in eval mode
+        )
 
-		# Load saved parameters into the model
-		nnx.update(loaded_model, saved_data['params'])
+        # Load saved parameters into the model
+        nnx.update(loaded_model, saved_data['params'])
 
-		# Put in eval mode
-		nnx.eval_mode(loaded_model)
+        # Put in eval mode
+        nnx.eval_mode(loaded_model)
 
-		print(f'Loaded FundamentalFormPredictor model:')
-		print(f'  embed_dim: {saved_data["embed_dim"]}')
-		print(f'  n_freq: {n_freq}')
-		print(f'  n_heads: {saved_data["n_heads"]}')
-		print(f'  n_layers: {saved_data["n_layers"]}')
-		print(f'  mlp_dim: {saved_data["mlp_dim"]}')
-		print(f'  dropout_rate: {saved_data["dropout_rate"]}')
+        print(f'Loaded FundamentalFormPredictor model:')
+        print(f'  embed_dim: {saved_data["embed_dim"]}')
+        print(f'  n_freq: {n_freq}')
+        print(f'  n_heads: {saved_data["n_heads"]}')
+        print(f'  n_layers: {saved_data["n_layers"]}')
+        print(f'  mlp_dim: {saved_data["mlp_dim"]}')
+        print(f'  dropout_rate: {saved_data["dropout_rate"]}')
 
-		return loaded_model, saved_data['k_neighbors']
+        return loaded_model, saved_data['k_neighbors']
 
 
 class FundamentalFormPredictorWithUncertainty(nnx.Module):
-	def __init__(
-		self,
-		embed_dim: int = 128,
-		n_freq: int = 0,
-		n_layers: int = 4,
-		n_heads: int = 4,
-		mlp_dim: int = 256,
-		dropout_rate: float = 0.0,
-		*,
-		rngs: nnx.Rngs,
-	):
-		"""
-		Args: Parameters for each TransformerBlock.
-			n_layers: Number of TransformerBlocks.
-		"""
+    def __init__(
+        self,
+        embed_dim: int = 128,
+        n_freq: int = 0,
+        n_layers: int = 4,
+        n_heads: int = 4,
+        mlp_dim: int = 256,
+        dropout_rate: float = 0.0,
+        *,
+        rngs: nnx.Rngs,
+    ):
+        """
+        Args: Parameters for each TransformerBlock.
+            n_layers: Number of TransformerBlocks.
+        """
 
-		self.input_encoder = InputFeatures(embed_dim, n_freq=n_freq, rngs=rngs)
+        self.input_encoder = InputFeaturesWithUncertainty(embed_dim, n_freq=n_freq, rngs=rngs)
 
-		self.blocks = nnx.List(
-			[TransformerBlock(embed_dim, n_heads, mlp_dim, dropout_rate, rngs=rngs) for _ in range(n_layers)]
-		)
+        self.blocks = nnx.List(
+            [TransformerBlock(embed_dim, n_heads, mlp_dim, dropout_rate, rngs=rngs) for _ in range(n_layers)]
+        )
 
-		self.final_norm = nnx.LayerNorm(embed_dim, rngs=rngs)
+        self.final_norm = nnx.LayerNorm(embed_dim, rngs=rngs)
 
-		# Projection
-		# (a00, a01, a10, a11, a02, a20, uncertainty)
-		self.mlp = nnx.Sequential(
-			nnx.Linear(
-				embed_dim,
-				7,
-				kernel_init=nnx.initializers.zeros_init(),
-				# bias_init=nnx.initializers.ones_init(),
-				bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 0.0])),
-				rngs=rngs,
-			),
-		)
+        # Projection
+        # (a00, a01, a10, a11, a02, a20, uncertainty)
+        self.mlp = nnx.Sequential(
+            nnx.Linear(
+                embed_dim,
+                7,
+                kernel_init=nnx.initializers.zeros_init(),
+                # bias_init=nnx.initializers.ones_init(),
+                bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 0.0])),
+                rngs=rngs,
+            ),
+        )
 
-	@nnx.jit
-	def __call__(self, positions: jax.Array, normals: jax.Array) -> jax.Array:
-		"""
-		Args:
-			positions, normals: [batch, k, 3] representing a neighborhood of size k; the first point (index 0) is the center
+    @nnx.jit
+    def __call__(self, positions: jax.Array, normals: jax.Array) -> jax.Array:
+        """
+        Args:
+            positions, normals: [batch, k, 3] representing a neighborhood of size k; the first point (index 0) is the center
 
-		Returns:
-			coefficients: [batch, 6] (a00, a01, a10, a11, a02, a20)
-		"""
-		batch_size, k, d = positions.shape
+        Returns:
+            coefficients: [batch, 6] (a00, a01, a10, a11, a02, a20)
+        """
+        print("POSITIONS SHAPE")
+        print(positions.shape)
+        n_shapes, batch_size, k, d = positions.shape
 
-		# input_features: [batch, k, embed_dim]
-		# scale: [batch, ]
-		input_features, scale = self.input_encoder(positions, normals)
-		x = input_features
+        # input_features: [batch, k, embed_dim]
+        # scale: [batch, ]
+        input_features, scale = self.input_encoder(positions, normals)
+        x = input_features
 
-		# Apply transformer blocks
-		for block in self.blocks:
-			x = block(x)
+        # Apply transformer blocks
+        for block in self.blocks:
+            x = block(x)
 
-		x = self.final_norm(x)  # [batch, k, embed_dim]
+        x = self.final_norm(x)  # [batch, k, embed_dim]
 
-		# Extract center point
-		x = x[:, 0, :]  # [batch, embed_dim]
+        # Extract center point
+        x = x[:, :, 0, :]  # [device, batch, embed_dim]
 
-		# Predict form coefficients
-		coeffs = self.mlp(x)  # [batch, 7]
+        # Predict form coefficients
+        coeffs = self.mlp(x)  # [device, batch, 7]
 
-		# Scale back to original space
-		coeffs = jnp.stack(
-			[
-				coeffs[:, 0] * scale,  # a00
-				coeffs[:, 1],  # a01
-				coeffs[:, 2],  # a10
-				coeffs[:, 3] / scale,  # a11
-				coeffs[:, 4] / scale,  # a02
-				coeffs[:, 5] / scale,  # a20
-				coeffs[:, 6] * scale   # uncertainty
-			],
-			axis=-1,
-		)
+        # Scale back to original space
+        coeffs = jnp.stack(
+            [
+                coeffs[:, :, 0] * scale,  # a00
+                coeffs[:, :, 1],  # a01
+                coeffs[:, :, 2],  # a10
+                coeffs[:, :, 3] / scale,  # a11
+                coeffs[:, :, 4] / scale,  # a02
+                coeffs[:, :, 5] / scale,  # a20
+                coeffs[:, :, 6] * scale   # uncertainty
+            ],
+            axis=-1,
+        )
 
-		return coeffs
+        return coeffs
 
-	def precompute_coefficients(self, points, normals, k_neighbors, outliers=np.array([])):
-		nnx.eval_mode(self)
-		# Generate neighborhoods
-		indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
+    def precompute_coefficients(self, points, normals, k_neighbors, outliers=np.array([])):
+        nnx.eval_mode(self)
+        # Generate neighborhoods
+        indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
 
-		# Run forward evaluation.
-		predicted_coefficients = self(points[indices], normals[indices])  # (|P|, 7)
+        # Run forward evaluation.
+        predicted_coefficients = self(points[indices], normals[indices])  # (|P|, 7)
 
-		return predicted_coefficients
+        return predicted_coefficients
 
-	def precompute_coefficients_in_chunks(self, points, normals, k_neighbors, chunk_size=50000, outliers=np.array([]), use_linear_least_squares: bool = False):
-		"""
-		Process in chunks to avoid GPU memory issues
-		"""
-		nnx.eval_mode(self)
+    def precompute_coefficients_in_chunks(self, points, normals, k_neighbors, chunk_size=50000, outliers=np.array([]), use_linear_least_squares: bool = False):
+        """
+        Process in chunks to avoid GPU memory issues
+        """
+        nnx.eval_mode(self)
 
-		n_points = points.shape[0]
-		print(f'Processing {n_points} points in chunks of {chunk_size}...')
+        n_points = points.shape[0]
+        print(f'Processing {n_points} points in chunks of {chunk_size}...')
 
-		# Generate patches
-		t0 = time.time()
-		indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
-		t1 = time.time()
-		print(f'  get_neighbors: {t1 - t0:.2f}s')
+        # Generate patches
+        t0 = time.time()
+        indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
+        t1 = time.time()
+        print(f'  get_neighbors: {t1 - t0:.2f}s')
 
-		# Allocate output array
-		all_coefficients = []
+        # Allocate output array
+        all_coefficients = []
 
-		# Process in chunks
-		n_chunks = (n_points + chunk_size - 1) // chunk_size
-		t0 = time.time()
+        # Process in chunks
+        n_chunks = (n_points + chunk_size - 1) // chunk_size
+        t0 = time.time()
 
-		if use_linear_least_squares:
-			jit_least_squares = jax.jit(least_squares_coefficients)
+        if use_linear_least_squares:
+            jit_least_squares = jax.jit(least_squares_coefficients)
 
-		for chunk_idx in range(n_chunks):
-			start_idx = chunk_idx * chunk_size
-			end_idx = min(start_idx + chunk_size, n_points)
+        for chunk_idx in range(n_chunks):
+            start_idx = chunk_idx * chunk_size
+            end_idx = min(start_idx + chunk_size, n_points)
 
-			# Extract chunk
-			chunk_indices = indices[start_idx:end_idx]  # (chunk_size, k)
-			chunk_points = points[chunk_indices]  # (chunk_size, k, 3)
-			chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
+            # Extract chunk
+            chunk_indices = indices[start_idx:end_idx]  # (chunk_size, k)
+            chunk_points = points[chunk_indices]  # (chunk_size, k, 3)
+            chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
 
-			if use_linear_least_squares:
-				chunk_coeffs = jit_least_squares(chunk_points, chunk_normals)
+            if use_linear_least_squares:
+                chunk_coeffs = jit_least_squares(chunk_points, chunk_normals)
 
-			else:
-				# Forward pass for this chunk
-				chunk_coeffs = self(chunk_points, chunk_normals)
+            else:
+                # Forward pass for this chunk
+                chunk_coeffs = self(chunk_points, chunk_normals)
 
-			# Wait for GPU to finish and transfer to CPU
-			chunk_coeffs_cpu = np.array(chunk_coeffs.block_until_ready())
-			all_coefficients.append(chunk_coeffs_cpu)
+            # Wait for GPU to finish and transfer to CPU
+            chunk_coeffs_cpu = np.array(chunk_coeffs.block_until_ready())
+            all_coefficients.append(chunk_coeffs_cpu)
 
-			# Clear JAX cache for this chunk
-			del chunk_coeffs
+            # Clear JAX cache for this chunk
+            del chunk_coeffs
 
-			if (chunk_idx + 1) % 10 == 0:
-				print(f'	{chunk_idx + 1}/{n_chunks} chunks processed')
+            if (chunk_idx + 1) % 10 == 0:
+                print(f'    {chunk_idx + 1}/{n_chunks} chunks processed')
 
-		t1 = time.time()
-		print(f'  Coefficient prediction (chunked): {t1 - t0:.2f}s')
+        t1 = time.time()
+        print(f'  Coefficient prediction (chunked): {t1 - t0:.2f}s')
 
-		# Concatenate all chunks
-		predicted_coefficients = np.concatenate(all_coefficients, axis=0)
+        # Concatenate all chunks
+        predicted_coefficients = np.concatenate(all_coefficients, axis=0)
 
-		return predicted_coefficients
+        return predicted_coefficients
 
-	def _drop_last_layer(self):
-		self.blocks = self.blocks[:-1]
-		self.n_layers -= 1
+    def _drop_last_layer(self):
+        self.blocks = self.blocks[:-1]
+        self.n_layers -= 1
 
-	@staticmethod
-	def load_saved_model(filepath: str, drop_last_layer: bool):
-		"""
-		Given the filepath where weights are saved, return the model and its parameters.
-		"""
-		with open(filepath, 'rb') as f:
-			saved_data = pickle.load(f)
+    @staticmethod
+    def load_saved_model(filepath: str, drop_last_layer: bool):
+        """
+        Given the filepath where weights are saved, return the model and its parameters.
+        """
+        with open(filepath, 'rb') as f:
+            saved_data = pickle.load(f)
 
-		n_freq = saved_data['n_freq'] if 'n_freq' in saved_data else 0
+        n_freq = saved_data['n_freq'] if 'n_freq' in saved_data else 0
 
-		loaded_model = FundamentalFormPredictor(
-			embed_dim=saved_data['embed_dim'],
-			n_freq=n_freq,
-			n_heads=saved_data['n_heads'],
-			n_layers=saved_data['n_layers'],
-			mlp_dim=saved_data['mlp_dim'],
-			dropout_rate=saved_data['dropout_rate'],  # not used in eval mode
-			rngs=nnx.Rngs(0),  # not used in eval mode
-		)
+        loaded_model = FundamentalFormPredictor(
+            embed_dim=saved_data['embed_dim'],
+            n_freq=n_freq,
+            n_heads=saved_data['n_heads'],
+            n_layers=saved_data['n_layers'],
+            mlp_dim=saved_data['mlp_dim'],
+            dropout_rate=saved_data['dropout_rate'],  # not used in eval mode
+            rngs=nnx.Rngs(0),  # not used in eval mode
+        )
 
-		# Load saved parameters into the model
-		nnx.update(loaded_model, saved_data['params'])
+        # Load saved parameters into the model
+        nnx.update(loaded_model, saved_data['params'])
 
-		# Projection
-		# (a00, a01, a10, a11, a02, a20, uncertainty)
-		loaded_model.mlp = nnx.Sequential(
-			nnx.Linear(
-				saved_data['embed_dim'],
-				7,
-				kernel_init=nnx.initializers.zeros_init(),
-				# bias_init=nnx.initializers.ones_init(),
-				bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 0.0])),
-				rngs=nnx.Rngs(0),
-			),
-		)
+        # Projection
+        # (a00, a01, a10, a11, a02, a20, uncertainty)
+        loaded_model.mlp = nnx.Sequential(
+            nnx.Linear(
+                saved_data['embed_dim'],
+                7,
+                kernel_init=nnx.initializers.zeros_init(),
+                # bias_init=nnx.initializers.ones_init(),
+                bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 0.0])),
+                rngs=nnx.Rngs(0),
+            ),
+        )
 
-		if drop_last_layer:
-			loaded_model._drop_last_layer()
+        if drop_last_layer:
+            loaded_model._drop_last_layer()
 
-		# Put in eval mode
-		nnx.eval_mode(loaded_model)
+        # Put in eval mode
+        nnx.eval_mode(loaded_model)
 
-		print(f'Loaded FundamentalFormPredictor model:')
-		print(f'  embed_dim: {saved_data["embed_dim"]}')
-		print(f'  n_freq: {n_freq}')
-		print(f'  n_heads: {saved_data["n_heads"]}')
-		print(f'  n_layers: {saved_data["n_layers"]}')
-		print(f'  mlp_dim: {saved_data["mlp_dim"]}')
-		print(f'  dropout_rate: {saved_data["dropout_rate"]}')
+        print(f'Loaded FundamentalFormPredictor model:')
+        print(f'  embed_dim: {saved_data["embed_dim"]}')
+        print(f'  n_freq: {n_freq}')
+        print(f'  n_heads: {saved_data["n_heads"]}')
+        print(f'  n_layers: {saved_data["n_layers"]}')
+        print(f'  mlp_dim: {saved_data["mlp_dim"]}')
+        print(f'  dropout_rate: {saved_data["dropout_rate"]}')
 
-		return loaded_model, saved_data['k_neighbors']
+        return loaded_model, saved_data['k_neighbors']
