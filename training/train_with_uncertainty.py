@@ -405,7 +405,7 @@ def TrainFundamentalFormPredictor(
         print(f'Model saved to {filepath}')
 
     # ---- Training loop ----
-    nnx.train_mode(model)
+    model.train()
 
     t0 = time.time()
     all_train_losses = []
@@ -604,7 +604,7 @@ def TrainFundamentalFormPredictor(
 
             # ---- Validation (kept single-device for simplicity) ----
             if val_positions is not None:
-                nnx.eval_mode(model)
+                model.eval()
                 n_val_shapes = len(val_positions)
                 val_shape_losses = []
                 val_shape_eikonality_losses = []
@@ -663,7 +663,6 @@ def TrainFundamentalFormPredictor(
 
                 val_loss = np.mean(val_shape_losses) if val_shape_losses else 0.0
                 val_eik  = np.mean(val_shape_eikonality_losses) if val_shape_eikonality_losses else 0.0
-                nnx.train_mode(model)
 
                 validation_losses.append(val_loss)
                 validation_epochs.append(epoch)
@@ -672,6 +671,7 @@ def TrainFundamentalFormPredictor(
                     f'{"eikonality:":<{LABEL_WIDTH}}{val_eik:<{VALUE_WIDTH}.6f}'
                     f'uncertainty = {epoch_uncertainty_loss:.6f}'
                 )
+                model.train()
 
     t1 = time.time()
     print(f'Total training time: {t1 - t0:.2f} s')

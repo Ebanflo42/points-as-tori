@@ -17,9 +17,9 @@ classifiers = [
 ]
 dependencies = [
   "numpy",
-  "jax==0.8.2",
+  "jax",
   "jaxlib",
-  "flax==0.12.2",
+  "flax",
   "optax",
   "plyfile",
 ]

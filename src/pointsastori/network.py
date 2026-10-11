@@ -179,16 +179,16 @@ def _compute_shifts_from_distances_sharded(distances: jnp.ndarray, mask: jnp.nda
     Returns:
         shifts: (batch_size, n_queries)
     """
-    #k = 64
-    #max_points = distances.shape[-1]
-    #k_actual = min(k, max_points)
+    k = 64
+    max_points = distances.shape[-1]
+    k_actual = min(k, max_points)
 
     m = mask[:, None, None, :]  # (n_devices, 1, 1, max_points)
 
     # top_k on negated distances: invalid points → -inf so they're never selected.
     neg_distances = jnp.where(m, -distances, -jnp.inf)
     print(f"NEG DIST {neg_distances.shape}")
-    neg_knn, _ = jax.lax.top_k(neg_distances, 64)  # (batch, n_queries, k_actual)
+    neg_knn, _ = jax.lax.top_k(neg_distances, k_actual)  # (batch, n_queries, k_actual)
     knn_dists = -neg_knn  # positive, ascending order (nearest first)
 
     # Shift = 0.5 * max distance among k nearest valid neighbors
