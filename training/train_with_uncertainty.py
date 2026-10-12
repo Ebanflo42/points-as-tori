@@ -49,13 +49,13 @@ def SDF_loss_with_uncertainty(
     centers, axes, major_radii, minor_radii = torus_precompute_masked_sharded(
         mask, positions, normals, coefficients
     )
-    predicted_distances, predicted_gradients, interpolated_uncertainty = torus_distance_gradient_masked_with_clamp(
+    predicted_distances, predicted_gradients, interpolated_uncertainty, weight, normalization = torus_distance_gradient_masked_with_clamp(
         mask, queries, positions, centers, axes, major_radii, minor_radii, neighborhood_radii, uncertainties_pos
     )
 
     uncertainty_safe = 1e-10 + interpolated_uncertainty
 
-    distance_error = jnp.abs((predicted_distances - true_distances)) / uncertainty_safe
+    distance_error = jnp.abs((predicted_distances - true_distances))/uncertainty_safe
     distance_valid_mask = ~jnp.isnan(distance_error) & batch_mask[:, :, None]
     distance_error_masked = jnp.sum(distance_error * distance_valid_mask, axis=-1)
     num_valid_distance_queries = jnp.sum(distance_valid_mask)
@@ -80,14 +80,15 @@ def SDF_loss_with_uncertainty(
         lambda: 0.0,
     )
 
-    uncertainty_loss = 0.5*jnp.mean(uncertainty_safe - jnp.log(uncertainty_safe))
+    uncertainty_loss = 0.5*jnp.max(uncertainty_safe - jnp.log(uncertainty_safe))
 
     loss = distance_loss + eikonality_loss + uncertainty_loss
 
     loss_dict = {
         'distance_loss': distance_loss,
         'eikonality_loss': eikonality_loss,
-        'uncertainty_loss': uncertainty_loss
+        'uncertainty_loss': jnp.mean(uncertainty_safe),
+        'normalization': jnp.min(jnp.sum(weight/normalization, axis=-1))
     }
     return loss, loss_dict
 
@@ -100,24 +101,24 @@ def validation_loss(
 ):
     uncertainties_pos = nnx.softplus(uncertainties)
 
-    centers, axes, major_radii, minor_radii = torus_precompute_masked(
+    centers, axes, major_radii, minor_radii = torus_precompute_masked_sharded(
         mask, positions, normals, coefficients
     )
-    predicted_distances, predicted_gradients, interpolated_uncertainty = torus_distance_gradient_masked_with_clamp(
+    predicted_distances, predicted_gradients, interpolated_uncertainty, _, _ = torus_distance_gradient_masked_with_clamp(
         mask, queries, positions, centers, axes, major_radii, minor_radii, neighborhood_radii, uncertainties_pos
     )
 
     uncertainty_safe = 1e-10 + interpolated_uncertainty
 
     distance_error = jnp.abs((predicted_distances - true_distances)) / uncertainty_safe
-    distance_valid_mask = ~jnp.isnan(distance_error) & batch_mask[:, None]
+    distance_valid_mask = ~jnp.isnan(distance_error) & batch_mask[..., jnp.newaxis]
     distance_error_masked = jnp.sum(distance_error * distance_valid_mask, axis=-1)
     num_valid_distance_queries = jnp.sum(distance_valid_mask)
 
     eikonality_error = jnp.abs(
         1.0 - jnp.sqrt(jnp.sum(predicted_gradients * predicted_gradients, axis=-1))
     )
-    eikonality_valid_mask = ~jnp.isnan(eikonality_error) & batch_mask[:, None]
+    eikonality_valid_mask = ~jnp.isnan(eikonality_error) & batch_mask[..., jnp.newaxis]
     eikonality_error_masked = jnp.sum(
         jnp.where(eikonality_valid_mask, eikonality_error, 0.0), axis=-1
     )
@@ -162,7 +163,7 @@ def FundamentalFormPredictorTrainer(
     weight_decay=0.0,
     warmup_steps=1000,
     total_steps=100000,
-    seed=42,
+    seed=44,
 ):
     if rngs is None:
         rngs = nnx.Rngs(seed)
@@ -218,10 +219,6 @@ def FundamentalFormPredictorTrainer(
         Returns:
             Loss averaged over batch.
         """
-        print("POSITIONS NORMALS NEIGHBORS SHAPE")
-        print(positions.shape)
-        print(normals.shape)
-        print(neighbors.shape)
 
         def loss_fn(model):
             positions_for_model = jax.vmap(lambda x, i: x[i])(positions, neighbors)
@@ -292,7 +289,7 @@ def TrainFundamentalFormPredictor(
     mlp_dim = embed_dim * 2
 
     # Sampling
-    n_queries_per_neighborhood = 120
+    n_queries_per_neighborhood = 60
     narrow_band_offset = 0.2
     bbox_extension = 1.0
 
@@ -385,7 +382,7 @@ def TrainFundamentalFormPredictor(
 
     # ---- Save helper ----
     def save_model(curr_model, epoch, save_filepath: str = None):
-        nnx.eval_mode(curr_model)
+        curr_model.eval()
         params = nnx.state(curr_model, nnx.Param)
         saved_data = {
             'params': params,
@@ -495,7 +492,6 @@ def TrainFundamentalFormPredictor(
                     n_batches=n_batches,
                     global_idx=int(global_idx),
                 ))
-
             n_batches_common = min(p['n_batches'] for p in per_shape)
 
             stacked = {}
@@ -568,6 +564,7 @@ def TrainFundamentalFormPredictor(
                 epoch_uncertainty_losses.append(
                     float(jax.device_get(loss_dict['uncertainty_loss']))
                 )
+                #print(f"normalization: {loss_dict['normalization']}")
                 total_num_batches += 1
 
             if group_i % n_shapes_to_save == 0 and group_i > 0:
@@ -579,10 +576,9 @@ def TrainFundamentalFormPredictor(
                     f'  Epoch {epoch}, group {group_i}/{n_groups}: '
                     f'loss = {epoch_train_loss:.6f}  '
                     f'distance = {epoch_distance_loss:.6f}  '
-                    f'eikonality = {epoch_eikonality_loss:.6f}'
+                    f'eikonality = {epoch_eikonality_loss:.6f}  '
                     f'uncertainty = {epoch_uncertainty_loss:.6f}'
                 )
-
         epoch_train_loss = np.mean(epoch_losses) if epoch_losses else 0.0
         epoch_distance_loss = np.mean(epoch_distance_losses) if epoch_distance_losses else 0.0
         epoch_eikonality_loss = np.mean(epoch_eikonality_losses) if epoch_eikonality_losses else 0.0
@@ -597,7 +593,7 @@ def TrainFundamentalFormPredictor(
                 f'Epoch {epoch}:\n'
                 f'    {"total loss:":<{LABEL_WIDTH}}{epoch_train_loss:<{VALUE_WIDTH}.6f}'
                 f'{"distance:":<{LABEL_WIDTH}}{epoch_distance_loss:<{VALUE_WIDTH}.6f}'
-                f'{"eikonality:":<{LABEL_WIDTH}}{epoch_eikonality_loss:<{VALUE_WIDTH}.6f}'
+                f'{"eikonality:":<{LABEL_WIDTH}}{epoch_eikonality_loss:<{VALUE_WIDTH}.6f}  '
                 f'uncertainty = {epoch_uncertainty_loss:.6f}'
             )
             save_model(model, epoch)
@@ -630,7 +626,9 @@ def TrainFundamentalFormPredictor(
                         val_pos, val_neigh, val_verts, val_faces, val_fmask,
                         val_key, n_queries=n_queries_per_neighborhood,
                     )
-                    val_weights = model(val_pos[val_neigh], val_norm[val_neigh])
+                    val_output = model(val_pos[val_neigh][jnp.newaxis], val_norm[val_neigh][jnp.newaxis])
+                    val_coeffs = val_output[..., :-1]
+                    val_uncertainty = val_output[..., -1]
 
                     n_val_batches = (val_pos.shape[0] + batch_size - 1) // batch_size
                     batch_val_losses = []
@@ -645,8 +643,8 @@ def TrainFundamentalFormPredictor(
                         br = jax.lax.dynamic_slice_in_dim(val_neighborhood_radii, start_idx, batch_size)
                         if jnp.sum(bm) > 0:
                             vl, val_loss_dict = validation_loss(
-                                val_mask, bm, val_pos, val_norm,
-                                val_weights, bq, bd, br
+                                val_mask[jnp.newaxis], bm[jnp.newaxis], val_pos[jnp.newaxis], val_norm[jnp.newaxis],
+                                val_coeffs, val_uncertainty, bq[jnp.newaxis], bd[jnp.newaxis], br[jnp.newaxis]
                             )
                             batch_val_losses.append(float(vl))
                             batch_val_eikonality_losses.append(float(val_loss_dict['eikonality_loss']))
@@ -721,9 +719,9 @@ def train():
         model_name,
         training_data_filenames,
         num_epochs=24,
-        learning_rate=1e-5,
+        learning_rate=1e-3,
         warmup_steps=1e4,
-        batch_size=1024,
+        batch_size=2048,
         n_epochs_to_save=1,
         n_shapes_to_save=10,
         drop_last_layer=False,
@@ -740,9 +738,9 @@ def train():
         model_name,
         training_data_filenames,
         num_epochs=8,
-        learning_rate=1e-6,
+        learning_rate=1e-4,
         warmup_steps=1e4,
-        batch_size=1024,
+        batch_size=2048,
         n_epochs_to_save=1,
         n_shapes_to_save=100,
         drop_last_layer=False,
@@ -759,9 +757,9 @@ def train():
         model_name,
         training_data_filenames,
         num_epochs=8,
-        learning_rate=1e-6,
+        learning_rate=1e-5,
         warmup_steps=1e4,
-        batch_size=1024,
+        batch_size=2048,
         n_epochs_to_save=1,
         n_shapes_to_save=100,
         drop_last_layer=False,
@@ -779,7 +777,7 @@ def train():
         num_epochs=5,
         learning_rate=1e-6,
         warmup_steps=1e3,
-        batch_size=1024,
+        batch_size=2048,
         n_epochs_to_save=1,
         n_shapes_to_save=100,
         drop_last_layer=False,
@@ -799,7 +797,7 @@ def train():
         num_epochs=2,
         learning_rate=1e-7,
         warmup_steps=1e3,
-        batch_size=512,
+        batch_size=2048,
         n_epochs_to_save=1,
         n_shapes_to_save=100,
         drop_last_layer=False,

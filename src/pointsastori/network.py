@@ -151,7 +151,7 @@ def _compute_shifts_from_distances(distances: jnp.ndarray, mask: jnp.ndarray) ->
     Returns:
         shifts: (batch_size, n_queries)
     """
-    k = 64
+    k = 16
     max_points = distances.shape[-1]
     k_actual = min(k, max_points)
 
@@ -179,21 +179,23 @@ def _compute_shifts_from_distances_sharded(distances: jnp.ndarray, mask: jnp.nda
     Returns:
         shifts: (batch_size, n_queries)
     """
-    k = 64
-    max_points = distances.shape[-1]
-    k_actual = min(k, max_points)
-
     m = mask[:, None, None, :]  # (n_devices, 1, 1, max_points)
 
     # top_k on negated distances: invalid points → -inf so they're never selected.
-    neg_distances = jnp.where(m, -distances, -jnp.inf)
-    print(f"NEG DIST {neg_distances.shape}")
-    neg_knn, _ = jax.lax.top_k(neg_distances, k_actual)  # (batch, n_queries, k_actual)
-    knn_dists = -neg_knn  # positive, ascending order (nearest first)
+    neg_distances = jnp.where(m, distances, -jnp.inf)
 
-    # Shift = 0.5 * max distance among k nearest valid neighbors
-    finite_knn = jnp.where(jnp.isfinite(knn_dists), knn_dists, 0.0)
-    return 0.5 * jnp.max(finite_knn, axis=-1)  # (batch, n_queries)
+    #k = 16
+    #max_points = distances.shape[-1]
+    #k_actual = min(k, max_points)
+
+    #print(f"NEG DIST {neg_distances.shape}")
+    #neg_knn, _ = jax.lax.top_k(neg_distances, k_actual)  # (batch, n_queries, k_actual)
+    #knn_dists = -neg_knn  # positive, ascending order (nearest first)
+
+    ## Shift = 0.5 * max distance among k nearest valid neighbors
+    #finite_knn = jnp.where(jnp.isfinite(knn_dists), knn_dists, 0.0)
+    #return 0.5 * jnp.max(finite_knn, axis=-1)  # (batch, n_queries)
+    return jnp.median(neg_distances, axis=-1)
 
 
 @jit
@@ -207,7 +209,7 @@ def compute_lambdas_jax(shifts: jnp.ndarray) -> jnp.ndarray:
     Returns:
         lam: (...,) lambda values
     """
-    return 64.0 / shifts
+    return jnp.ones_like(shifts)
 
 
 @jit
@@ -621,11 +623,11 @@ def torus_distance_gradient_masked_with_clamp(
 
     s = jnp.sign(r_i)                       # (D, 1, 1, P)
     g_z = s * (d - jnp.abs(r_i))            # (D, B, Q, P)
-    g_z_ = jnp.where(mask_i, g_z, 0.0)      # (D, B, Q, P)
+    g_z = jnp.where(mask_i, g_z, 0.0)      # (D, B, Q, P)
 
     sphere_dist = dist_to_point - neighborhood_radii[:, :, None, None]
     #             (D, B, Q, P)  - (D, 1, 1, P) -> (D, B, Q, P)
-    g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
+    #g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
 
     # --- Torus gradient (same math, all arrays are 5D with device axis) ---
     v_safe = jnp.maximum(v, NAN_EPSILON)
@@ -664,8 +666,8 @@ def torus_distance_gradient_masked_with_clamp(
 
     rHat = rVec / jnp.maximum(dist_to_point, NAN_EPSILON)[..., None]
 
-    grad_g_ = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (D, B, Q, P, 3)
-    grad_g = jnp.where(sphere_dist[..., None] > g_z_[..., None], grad_g_, rHat)
+    grad_g = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (D, B, Q, P, 3)
+    #grad_g = jnp.where(sphere_dist[..., None] > g_z_[..., None], grad_g_, rHat)
 
     lam_expanded = lam[:, :, :, None]       # (D, B, Q, 1)
     shift_expanded = shifts[:, :, :, None]  # (D, B, Q, 1)
@@ -674,6 +676,7 @@ def torus_distance_gradient_masked_with_clamp(
     )  # (D, B, Q, P)
     weight = jnp.where(mask_i, weight, 0.0)
 
+    # I changed lambda to not depend on position
     grad_g_minus_lambda_n_g = jnp.sum(
         weight[..., None] * (grad_g - lam_expanded[..., None] * rHat * g_z[..., None]),
         axis=3,
@@ -685,17 +688,17 @@ def torus_distance_gradient_masked_with_clamp(
     normalization = jnp.sum(weight, axis=3, keepdims=True)  # (D, B, Q, 1)
     normalization_safe = jnp.maximum(normalization, NAN_EPSILON)
 
-    # --- FIX: uncertainties needs an explicit point-axis position ---
-    interpolated_uncertainty = jnp.sum(
-        weight * uncertainties[:, :, None, None], axis=3
+    weighted_uncertainty = jnp.sum(
+        (weight / normalization_safe) * uncertainties[:, :, jnp.newaxis, jnp.newaxis], axis=-1
     )  # (D, B, Q)
+    normalized_uncertainty = weighted_uncertainty
 
     A = grad_g_minus_lambda_n_g / normalization_safe  # (D, B, Q, 3)
     B = lam_expanded * n / normalization_safe         # (D, B, Q, 3)
     dist = g / normalization_safe[..., 0]             # (D, B, Q)
     grad = A + dist[..., None] * B                    # (D, B, Q, 3)
 
-    return dist, grad, interpolated_uncertainty
+    return dist, grad, normalized_uncertainty, weight, normalization_safe
 
 
 # ========================================================================
@@ -1555,7 +1558,7 @@ class FundamentalFormPredictorWithUncertainty(nnx.Module):
         return coeffs
 
     def precompute_coefficients(self, points, normals, k_neighbors, outliers=np.array([])):
-        nnx.eval_mode(self)
+        self.eval()
         # Generate neighborhoods
         indices = get_neighbors(points, k_neighbors, outliers)  # (|P|, k)
 
@@ -1568,7 +1571,7 @@ class FundamentalFormPredictorWithUncertainty(nnx.Module):
         """
         Process in chunks to avoid GPU memory issues
         """
-        nnx.eval_mode(self)
+        self.eval()
 
         n_points = points.shape[0]
         print(f'Processing {n_points} points in chunks of {chunk_size}...')
@@ -1658,7 +1661,7 @@ class FundamentalFormPredictorWithUncertainty(nnx.Module):
                 7,
                 kernel_init=nnx.initializers.zeros_init(),
                 # bias_init=nnx.initializers.ones_init(),
-                bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 0.0])),
+                bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 1.0])),
                 rngs=nnx.Rngs(0),
             ),
         )
@@ -1667,7 +1670,7 @@ class FundamentalFormPredictorWithUncertainty(nnx.Module):
             loaded_model._drop_last_layer()
 
         # Put in eval mode
-        nnx.eval_mode(loaded_model)
+        loaded_model.eval()
 
         print(f'Loaded FundamentalFormPredictor model:')
         print(f'  embed_dim: {saved_data["embed_dim"]}')
