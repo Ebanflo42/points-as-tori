@@ -1632,52 +1632,36 @@ class FundamentalFormPredictorWithUncertainty(nnx.Module):
 
     @staticmethod
     def load_saved_model(filepath: str, drop_last_layer: bool):
-        """
-        Given the filepath where weights are saved, return the model and its parameters.
-        """
         with open(filepath, 'rb') as f:
             saved_data = pickle.load(f)
 
         n_freq = saved_data['n_freq'] if 'n_freq' in saved_data else 0
 
+        # 1. Rebuild model structure
         loaded_model = FundamentalFormPredictor(
             embed_dim=saved_data['embed_dim'],
             n_freq=n_freq,
             n_heads=saved_data['n_heads'],
             n_layers=saved_data['n_layers'],
             mlp_dim=saved_data['mlp_dim'],
-            dropout_rate=saved_data['dropout_rate'],  # not used in eval mode
-            rngs=nnx.Rngs(0),  # not used in eval mode
+            dropout_rate=saved_data['dropout_rate'],
+            rngs=nnx.Rngs(0),
         )
 
-        # Load saved parameters into the model
-        nnx.update(loaded_model, saved_data['params'])
+        # 2. Get the model's current state structure (as nnx.State)
+        _, current_state = nnx.split(loaded_model)
 
-        # Projection
-        # (a00, a01, a10, a11, a02, a20, uncertainty)
-        loaded_model.mlp = nnx.Sequential(
-            nnx.Linear(
-                saved_data['embed_dim'],
-                7,
-                kernel_init=nnx.initializers.zeros_init(),
-                # bias_init=nnx.initializers.ones_init(),
-                bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 1.0])),
-                rngs=nnx.Rngs(0),
-            ),
-        )
+        # 3. Convert the saved pure dict back to nnx.State
+        saved_state = saved_data['state']
+        # If from_pure_dict isn't available in your version:
+        # saved_state = jax.tree.map(lambda x: x, current_state)  # placeholder
+        # saved_state = nnx.State(saved_data['state'])  # may need restructuring
 
+        # 4. Update the model's state with saved values
+        nnx.update(loaded_model, saved_state)
+
+        # 5. Replace mlp layer if needed (do this AFTER loading state)
         if drop_last_layer:
             loaded_model._drop_last_layer()
 
-        # Put in eval mode
         loaded_model.eval()
-
-        print(f'Loaded FundamentalFormPredictor model:')
-        print(f'  embed_dim: {saved_data["embed_dim"]}')
-        print(f'  n_freq: {n_freq}')
-        print(f'  n_heads: {saved_data["n_heads"]}')
-        print(f'  n_layers: {saved_data["n_layers"]}')
-        print(f'  mlp_dim: {saved_data["mlp_dim"]}')
-        print(f'  dropout_rate: {saved_data["dropout_rate"]}')
-
-        return loaded_model, saved_data['k_neighbors']

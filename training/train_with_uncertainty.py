@@ -7,6 +7,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import optax
+import orbax.checkpoint as ocp
 from flax import nnx
 from jax.sharding import PartitionSpec, NamedSharding
 from jax.experimental import mesh_utils
@@ -345,13 +346,13 @@ def TrainFundamentalFormPredictor(
         seed=seed,
     )
 
+    checkpointer = ocp.StandardCheckpointer()
+
     # ---- Warm start (load weights INTO existing model; do not rebind) ----
     if load_model_path is not None:
-        loaded = FundamentalFormPredictorWithUncertainty.load_saved_model(
-            load_model_path, drop_last_layer=drop_last_layer
-        )
-        loaded_state = nnx.state(loaded, nnx.Param)
-        nnx.update(model, loaded_state)
+        graphdef, abstract_state = nnx.split(model)
+        state_restored = checkpointer.restore(os.path.abspath(f'models/{model_name}/{load_model_path}'), abstract_state)
+        model = nnx.merge(graphdef, state_restored)
         print(f'Warm-started from {load_model_path}')
 
     # ---- Shard model + optimizer state (replicated) ----
@@ -380,26 +381,35 @@ def TrainFundamentalFormPredictor(
     else:
         print(f'Validation file not found: {val_data_filename}')
 
-    # ---- Save helper ----
-    def save_model(curr_model, epoch, save_filepath: str = None):
+    def save_model(curr_model, save_filepath: str):
+        _, state = nnx.split(curr_model)
+        path = os.path.join(os.getcwd(), f'models/{model_name}/{save_filepath}')
+        checkpointer.save(path, state)
+    """
         curr_model.eval()
-        params = nnx.state(curr_model, nnx.Param)
+
+        # Extract only data (parameters), do not save graphdef
+        state = nnx.state(curr_model)  # or use nnx.state(curr_model, nnx.Param)
+        # Convert to pure dictionary (containing only arrays)
+        #pure_state = nnx.to_pure_dict(state)
+
         saved_data = {
-            'params': params,
+            'state': state,  # Pure dict, no functions
             'embed_dim': embed_dim,
             'n_freq': n_freq,
             'n_heads': n_heads,
             'n_layers': n_layers,
             'mlp_dim': mlp_dim,
-            'k_neighbors': k_neighbors,
             'dropout_rate': dropout_rate,
         }
-        this_model_name = f'{model_name}_{epoch}' if save_filepath is None \
-            else save_filepath
-        filepath = MODELS_DIR + this_model_name + '.pkl'
-        with open(filepath, 'wb') as f:
+        if epoch == num_epochs - 1:
+            path = save_filepath + '.pkl'
+        else:
+            path = save_filepath + f'_{epoch}.pkl'
+        with open(path, 'wb') as f:
             pickle.dump(saved_data, f)
-        print(f'Model saved to {filepath}')
+        print(f'Model saved to {save_filepath}')
+    """
 
     # ---- Training loop ----
     model.train()
@@ -596,7 +606,7 @@ def TrainFundamentalFormPredictor(
                 f'{"eikonality:":<{LABEL_WIDTH}}{epoch_eikonality_loss:<{VALUE_WIDTH}.6f}  '
                 f'uncertainty = {epoch_uncertainty_loss:.6f}'
             )
-            save_model(model, epoch)
+            save_model(model, f'{final_save_filepath}_{epoch}')
 
             # ---- Validation (kept single-device for simplicity) ----
             if val_positions is not None:
@@ -678,7 +688,7 @@ def TrainFundamentalFormPredictor(
     distance_losses = np.array(all_distance_losses)
     eikonality_losses = np.array(all_eikonality_losses)
 
-    save_model(model, num_epochs - 1, final_save_filepath)
+    save_model(model, f'{final_save_filepath}')
 
     # ---- Plot ----
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
@@ -711,7 +721,7 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = 'datasets/nice'
-    model_name = "UncertaintyTrial1"
+    model_name = "UncertaintyTest1"
 
     # Phase 0: nicely sampled blobs
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
