@@ -126,11 +126,13 @@ def cross_section_occupancy(points: jnp.ndarray,
     #    p = ro + t*rd
 
     #print(mask.shape, centers.shape, axes.shape, minor_radii.shape, major_radii.shape)
+    print(xyz.shape)
     d, _, _, = torus_distance_gradient_masked_with_clamp_chunked(
         mask, xyz[np.newaxis, np.newaxis], points, centers,
         axes, major_radii, minor_radii,
         neighborhood_radii, uncertainties
     )
+    print(d.shape)
         #print(d[jnp.newaxis, :, 0])
         #print(t.shape, d.shape)
         #t += np.clip(d[0, 0, :, np.newaxis], -1, 1)
@@ -143,7 +145,7 @@ def cross_section_occupancy(points: jnp.ndarray,
 
 if __name__ == "__main__":
     print("Loading model . . .")
-    model = load_model(os.path.abspath("models/UncertaintyTest1_phase3"))
+    model = load_model(os.path.abspath("models/UncertaintyTest5/UncertaintyTest5_phase0"))
 
     print("Loading point cloud . . .")
     points, normals, neighbors = load_block()

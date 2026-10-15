@@ -654,27 +654,26 @@ def torus_distance_gradient_masked_with_clamp(
     axis3d = rotation_to_cartesian_jax(axes)  # (n_devices, max_points, 3)
 
     # --- Broadcasting: q and p_i are 5D with device axis first ---
-    q = queries[:, :, :, None, :]      # (D, B, Q, 1, P, 3)?  NO — see note
-    # Wait: queries is (D, B, Q, 3). Adding a None at position 3 gives:
-    # (D, B, Q, 1, 3) — 5D. Good.
-    # But to broadcast against points (D, P, 3) we need points as (D, 1, 1, P, 3).
-    q = queries[:, :, :, None, :]      # (D, B, Q, 1, 3)
-    p_i = points[:, None, None, :, :]  # (D, 1, 1, P, 3)
+    # (D, B, Q, 1, 3)
+    q = queries[:, :, :, jnp.newaxis]      # (D, B, Q, 1, 3)
+    p_i = points[:, jnp.newaxis, jnp.newaxis]  # (D, 1, 1, P, 3)
     rVec = q - p_i                     # (D, B, Q, P, 3)
 
     # Compute query-to-point distances once and reuse for both shift and weight computation.
     # This avoids materializing the (batch, n_queries, max_points) distance tensor twice.
     rVec = q - p_i  # (batch, n_queries, max_points, 3)
-    #dist_to_point = jnp.linalg.norm(rVec, axis=-1)  # (batch, n_queries, max_points)
+    # dist_to_point (device, batch, query, point)
+    # rHat (device, batch, query, point, 3)
     dist_to_point, rHat, weights, grad_weights, normalization, grad_normalization = \
         _compute_weights_and_grads_from_distances_sharded(rVec, mask)
+    print(f"WEIGHTS GRADWEIGHTS NORMALIZATION GRADNORMALIZATION {weights.shape} {grad_weights.shape} {normalization.shape} {grad_normalization.shape}")
 
     # Torus parameters, broadcast to (D, 1, 1, P, ...)
-    c_i = centers[:, None, None, :, :]      # (D, 1, 1, P, 3)
-    axis_i = axis3d[:, None, None, :, :]    # (D, 1, 1, P, 3)
-    R_i = major_radii[:, None, None, :]     # (D, 1, 1, P)
-    r_i = minor_radii[:, None, None, :]     # (D, 1, 1, P)
-    mask_i = valid_torus_mask[:, None, None, :]  # (D, 1, 1, P)
+    c_i = centers[:, jnp.newaxis, jnp.newaxis, :, :]      # (D, 1, 1, P, 3)
+    axis_i = axis3d[:, jnp.newaxis, jnp.newaxis, :, :]    # (D, 1, 1, P, 3)
+    R_i = major_radii[:, jnp.newaxis, jnp.newaxis, :]     # (D, 1, 1, P)
+    r_i = minor_radii[:, jnp.newaxis, jnp.newaxis, :]     # (D, 1, 1, P)
+    mask_i = valid_torus_mask[:, jnp.newaxis, jnp.newaxis, :]  # (D, 1, 1, P)
 
     r_vec = q - c_i                         # (D, B, Q, P, 3)
     cross_prod = jnp.cross(r_vec, axis_i)   # (D, B, Q, P, 3)
@@ -683,12 +682,15 @@ def torus_distance_gradient_masked_with_clamp(
     d1 = v - R_i                            # (D, B, Q, P)
     d2 = jnp.sum(r_vec * axis_i, axis=-1)   # (D, B, Q, P)
     d  = jnp.sqrt(d1**2 + d2**2)            # (D, B, Q, P)
+    print(f"d r_i shape {d.shape} {r_i.shape}")
 
     s = jnp.sign(r_i)                       # (D, 1, 1, P)
     g_z = s * (d - jnp.abs(r_i))            # (D, B, Q, P)
+    print(f"g_z {g_z.shape}")
     g_z_ = jnp.where(mask_i, g_z, 0.0)      # (D, B, Q, P)
+    print(f"g_z_ {g_z_.shape}")
 
-    sphere_dist = dist_to_point[..., 0] - neighborhood_radii[:, :, jnp.newaxis, jnp.newaxis]
+    sphere_dist = dist_to_point[..., 0] - neighborhood_radii[:, jnp.newaxis, jnp.newaxis]
     #             (D, B, Q, P)  - (D, 1, 1, P) -> (D, B, Q, P)
     g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
 
@@ -760,7 +762,7 @@ def torus_distance_gradient_masked_with_clamp_chunked(
     minor_radii: jnp.ndarray,             # (n_devices, max_points)
     neighborhood_radii: jnp.ndarray,      # (n_devices, max_points)
     uncertainties: jnp.ndarray,           # (n_devices, max_points)
-    n_chunks: int = 8
+    n_chunks: int = 800
 ):
     assert queries.shape[2]%n_chunks == 0
     result_dist, result_grad, result_uncertainty, = ([], [], [])
@@ -768,9 +770,11 @@ def torus_distance_gradient_masked_with_clamp_chunked(
 
     for i in range(0, queries.shape[2], chunk_size):
         these_queries = jnp.asarray(queries[:, :, i : i + chunk_size])
-        dist, grad, normed_uncertainty, _, _ = torus_distance_gradient_masked_with_clamp(
+        print(these_queries.shape)
+        dist, grad, normed_uncertainty = torus_distance_gradient_masked_with_clamp(
             mask, these_queries, points, centers, axes, major_radii, minor_radii, neighborhood_radii, uncertainties
         )
+        print(dist.shape)
         result_dist.append(np.asarray(dist))
         result_grad.append(np.asarray(grad))
         result_uncertainty.append(np.asarray(normed_uncertainty))
