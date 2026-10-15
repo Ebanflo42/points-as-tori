@@ -209,7 +209,7 @@ def compute_lambdas_jax(shifts: jnp.ndarray) -> jnp.ndarray:
     Returns:
         lam: (...,) lambda values
     """
-    return jnp.ones_like(shifts)
+    return 25.0/shifts
 
 
 @jit
@@ -602,6 +602,8 @@ def torus_distance_gradient_masked_with_clamp(
     p_i = points[:, None, None, :, :]  # (D, 1, 1, P, 3)
     rVec = q - p_i                     # (D, B, Q, P, 3)
     dist_to_point = jnp.linalg.norm(rVec, axis=-1)  # (D, B, Q, P)
+    #indices = jnp.argpartition(dist_to_point, axis=-1)[:-64]
+    #points_per_query = points[indices]
 
     shifts = _compute_shifts_from_distances_sharded(dist_to_point, valid_torus_mask)
     lam = compute_lambdas_jax(shifts)   # (D, B, Q)
