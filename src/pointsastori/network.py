@@ -198,6 +198,66 @@ def _compute_shifts_from_distances_sharded(distances: jnp.ndarray, mask: jnp.nda
     return jnp.median(neg_distances, axis=-1)
 
 
+def _compute_weights_and_grads_from_distances_sharded(
+        rVec: jnp.ndarray,
+        mask: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """
+    :param rVec: Differences between query points and point cloud
+    :param mask: mask out invalid point cloud points
+    """
+    # compute distances and normalized direction vectors
+    # (device, batch, query, point, 1)
+    distances = jnp.linalg.norm(rVec, axis=-1, keepdims=True)
+    # (device, batch, query, point, 3)
+    rHat = rVec / jnp.maximum(NAN_EPSILON, distances)
+    print(f"RHAT SHAPE {rHat.shape}")
+
+    m = mask[:, jnp.newaxis, jnp.newaxis, :, jnp.newaxis]  # (n_devices, 1, 1, max_points, 1)
+
+    # top_k on negated distances: invalid points → -inf so they're never selected.
+    neg_distances = jnp.where(m, -distances, -jnp.inf)
+
+    # assume for now that there are at least 64 valid points in the point cloud (reasonable assumption)
+    k = 64
+    max_points = distances.shape[-1]
+    k_actual = min(k, max_points)
+
+    # get top 64 closest distances
+    # (device, batch, n_queries, k_actual, 1)
+    neg_knn, indices = jax.lax.top_k(neg_distances, k_actual, axis=-2)
+    # positive, ascending order (nearest first)
+    knn_dists = -neg_knn
+
+    # maximum distance of the closest 64 points
+    # (device, batch, n_queries, 1)
+    max_distances = knn_dists[..., -1, :]
+    # masks all points which are not in the top 64
+    # (device, batch, n_queries, max_points)
+    closest_points_mask = (distances <= max_distances[..., jnp.newaxis]).astype(jnp.float32)
+    # exponential coefficients decrease with the distance of the furthest point
+    # (device, batch, n_queries, 1)
+    lambdas = 128.0/jnp.maximum(NAN_EPSILON, max_distances)
+
+    # compute the gradient of lambdas
+    idx = indices[..., -1, jnp.newaxis]
+    exact_diff = jnp.take_along_axis(rHat, idx, axis=-2)[..., 0, :]
+    grad_lambdas = -128.0*exact_diff/jnp.maximum(NAN_EPSILON, max_distances**2)
+
+    logits = -lambdas[..., jnp.newaxis]*distances
+    max_logits = -jnp.min(-closest_points_mask*logits, axis=-1, keepdims=True)
+    weights = closest_points_mask*jnp.exp(closest_points_mask*logits - max_logits)
+    print(f"WEIGHTS SHAPE {weights.shape}")
+    normalization = jnp.sum(weights, axis=(3, 4))
+
+    # compute the gradients of the weights above
+    grad_weights = closest_points_mask*weights*(
+        -grad_lambdas[..., jnp.newaxis, :]*distances - lambdas[..., jnp.newaxis]*rHat
+    )
+    grad_normalization = jnp.sum(grad_weights, axis=-2)
+
+    return distances, rHat, weights, grad_weights, normalization, grad_normalization
+
+
 @jit
 def compute_lambdas_jax(shifts: jnp.ndarray) -> jnp.ndarray:
     """
@@ -601,12 +661,13 @@ def torus_distance_gradient_masked_with_clamp(
     q = queries[:, :, :, None, :]      # (D, B, Q, 1, 3)
     p_i = points[:, None, None, :, :]  # (D, 1, 1, P, 3)
     rVec = q - p_i                     # (D, B, Q, P, 3)
-    dist_to_point = jnp.linalg.norm(rVec, axis=-1)  # (D, B, Q, P)
-    #indices = jnp.argpartition(dist_to_point, axis=-1)[:-64]
-    #points_per_query = points[indices]
 
-    shifts = _compute_shifts_from_distances_sharded(dist_to_point, valid_torus_mask)
-    lam = compute_lambdas_jax(shifts)   # (D, B, Q)
+    # Compute query-to-point distances once and reuse for both shift and weight computation.
+    # This avoids materializing the (batch, n_queries, max_points) distance tensor twice.
+    rVec = q - p_i  # (batch, n_queries, max_points, 3)
+    #dist_to_point = jnp.linalg.norm(rVec, axis=-1)  # (batch, n_queries, max_points)
+    dist_to_point, rHat, weights, grad_weights, normalization, grad_normalization = \
+        _compute_weights_and_grads_from_distances_sharded(rVec, mask)
 
     # Torus parameters, broadcast to (D, 1, 1, P, ...)
     c_i = centers[:, None, None, :, :]      # (D, 1, 1, P, 3)
@@ -625,11 +686,11 @@ def torus_distance_gradient_masked_with_clamp(
 
     s = jnp.sign(r_i)                       # (D, 1, 1, P)
     g_z = s * (d - jnp.abs(r_i))            # (D, B, Q, P)
-    g_z = jnp.where(mask_i, g_z, 0.0)      # (D, B, Q, P)
+    g_z_ = jnp.where(mask_i, g_z, 0.0)      # (D, B, Q, P)
 
-    sphere_dist = dist_to_point - neighborhood_radii[:, :, None, None]
+    sphere_dist = dist_to_point[..., 0] - neighborhood_radii[:, :, jnp.newaxis, jnp.newaxis]
     #             (D, B, Q, P)  - (D, 1, 1, P) -> (D, B, Q, P)
-    #g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
+    g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
 
     # --- Torus gradient (same math, all arrays are 5D with device axis) ---
     v_safe = jnp.maximum(v, NAN_EPSILON)
@@ -665,42 +726,29 @@ def torus_distance_gradient_masked_with_clamp(
     grad_x = jnp.where(mask_i, grad_x, 0.0)
     grad_y = jnp.where(mask_i, grad_y, 0.0)
     grad_z = jnp.where(mask_i, grad_z, 0.0)
+    grad_g_ = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (D, B, Q, P, 3)
+    grad_g = jnp.where(sphere_dist[..., jnp.newaxis] > g_z_[..., jnp.newaxis], rHat, grad_g_)
 
-    rHat = rVec / jnp.maximum(dist_to_point, NAN_EPSILON)[..., None]
-
-    grad_g = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (D, B, Q, P, 3)
-    #grad_g = jnp.where(sphere_dist[..., None] > g_z_[..., None], grad_g_, rHat)
-
-    lam_expanded = lam[:, :, :, None]       # (D, B, Q, 1)
-    shift_expanded = shifts[:, :, :, None]  # (D, B, Q, 1)
-    weight = jnp.exp(
-        -lam_expanded * (dist_to_point - shift_expanded)
-    )  # (D, B, Q, P)
-    weight = jnp.where(mask_i, weight, 0.0)
-
-    # I changed lambda to not depend on position
-    grad_g_minus_lambda_n_g = jnp.sum(
-        weight[..., None] * (grad_g - lam_expanded[..., None] * rHat * g_z[..., None]),
-        axis=3,
-    )  # (D, B, Q, 3)
-
-    g = jnp.sum(weight * g_z, axis=3)  # (D, B, Q)
-    n = jnp.sum(weight[..., None] * rHat, axis=3)  # (D, B, Q, 3)
-
-    normalization = jnp.sum(weight, axis=3, keepdims=True)  # (D, B, Q, 1)
+    g = jnp.sum(weights[..., 0] * g_z, axis=-1)  # (batch, n_queries)
     normalization_safe = jnp.maximum(normalization, NAN_EPSILON)
+    dist = g / normalization_safe
+
+    print(f"GRAD WEIGHTS GZ SHAPE {grad_weights.shape} {g_z.shape}")
+    normalized_term1 = jnp.sum(grad_weights*g_z[..., jnp.newaxis], axis=-2)/normalization_safe[..., jnp.newaxis]
+
+    normalized_term2 = jnp.sum(weights*grad_g, axis=-2)/normalization_safe[..., jnp.newaxis]
+
+    normalized_term3 = -dist[..., jnp.newaxis]*grad_normalization/normalization_safe[..., jnp.newaxis]
+
+    grad = normalized_term1 + normalized_term2 + normalized_term3
 
     weighted_uncertainty = jnp.sum(
-        (weight / normalization_safe) * uncertainties[:, :, jnp.newaxis, jnp.newaxis], axis=-1
+        weights[..., 0] * uncertainties[:, :, jnp.newaxis, jnp.newaxis], axis=-1
     )  # (D, B, Q)
-    normalized_uncertainty = weighted_uncertainty
+    normalized_uncertainty = weighted_uncertainty/normalization_safe
 
-    A = grad_g_minus_lambda_n_g / normalization_safe  # (D, B, Q, 3)
-    B = lam_expanded * n / normalization_safe         # (D, B, Q, 3)
-    dist = g / normalization_safe[..., 0]             # (D, B, Q)
-    grad = A + dist[..., None] * B                    # (D, B, Q, 3)
+    return dist, grad, normalized_uncertainty
 
-    return dist, grad, normalized_uncertainty, weight, normalization_safe
 
 def torus_distance_gradient_masked_with_clamp_chunked(
     mask: jnp.ndarray,                    # (n_devices, max_points)

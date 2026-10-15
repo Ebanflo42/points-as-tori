@@ -50,7 +50,7 @@ def SDF_loss_with_uncertainty(
     centers, axes, major_radii, minor_radii = torus_precompute_masked_sharded(
         mask, positions, normals, coefficients
     )
-    predicted_distances, predicted_gradients, interpolated_uncertainty, weight, normalization = torus_distance_gradient_masked_with_clamp(
+    predicted_distances, predicted_gradients, interpolated_uncertainty = torus_distance_gradient_masked_with_clamp(
         mask, queries, positions, centers, axes, major_radii, minor_radii, neighborhood_radii, uncertainties_pos
     )
 
@@ -91,7 +91,7 @@ def SDF_loss_with_uncertainty(
         'distance_loss': distance_loss,
         'eikonality_loss': eikonality_loss,
         'uncertainty_loss': jnp.mean(uncertainty_safe),
-        'normalization': jnp.min(jnp.sum(weight/normalization, axis=-1))
+        #'normalization': jnp.min(jnp.sum(weight/normalization, axis=-1))
     }
     return loss, loss_dict
 
@@ -107,7 +107,7 @@ def validation_loss(
     centers, axes, major_radii, minor_radii = torus_precompute_masked_sharded(
         mask, positions, normals, coefficients
     )
-    predicted_distances, predicted_gradients, interpolated_uncertainty, _, _ = torus_distance_gradient_masked_with_clamp(
+    predicted_distances, predicted_gradients, interpolated_uncertainty = torus_distance_gradient_masked_with_clamp(
         mask, queries, positions, centers, axes, major_radii, minor_radii, neighborhood_radii, uncertainties_pos
     )
 
@@ -723,18 +723,18 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "UncertaintyTest3"
+    model_name = "UncertaintyTest5"
 
     # Phase 0: nicely sampled blobs
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=32,
+        num_epochs=18,
         learning_rate=1e-3,
         warmup_steps=1e3,
         batch_size=2048,
-        n_epochs_to_save=1,
+        n_epochs_to_save=18,
         n_shapes_to_save=10,
         drop_last_layer=False,
         #load_model_path='models/FundamentalFormPredictor_pretrained.pkl',
@@ -749,11 +749,11 @@ def train():
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=24,
+        num_epochs=14,
         learning_rate=1e-4,
         warmup_steps=1e3,
         batch_size=2048,
-        n_epochs_to_save=1,
+        n_epochs_to_save=14,
         n_shapes_to_save=100,
         drop_last_layer=False,
         load_model_path=f'{model_name}_phase0',
@@ -768,11 +768,11 @@ def train():
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=16,
+        num_epochs=10,
         learning_rate=1e-5,
         warmup_steps=1e3,
         batch_size=2048,
-        n_epochs_to_save=1,
+        n_epochs_to_save=10,
         n_shapes_to_save=100,
         drop_last_layer=False,
         load_model_path=f'{model_name}_phase1',
@@ -786,11 +786,11 @@ def train():
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=8,
+        num_epochs=6,
         learning_rate=1e-6,
         warmup_steps=1e3,
         batch_size=2048,
-        n_epochs_to_save=1,
+        n_epochs_to_save=6,
         n_shapes_to_save=100,
         drop_last_layer=False,
         load_model_path=f'{model_name}_phase2',
@@ -810,7 +810,7 @@ def train():
         learning_rate=1e-7,
         warmup_steps=1e3,
         batch_size=2048,
-        n_epochs_to_save=1,
+        n_epochs_to_save=2,
         n_shapes_to_save=100,
         drop_last_layer=False,
         load_model_path=f'{model_name}_phase3',
