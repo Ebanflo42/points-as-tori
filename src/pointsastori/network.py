@@ -702,6 +702,32 @@ def torus_distance_gradient_masked_with_clamp(
 
     return dist, grad, normalized_uncertainty, weight, normalization_safe
 
+def torus_distance_gradient_masked_with_clamp_chunked(
+    mask: jnp.ndarray,                    # (n_devices, max_points)
+    queries: np.ndarray,                  # (n_devices, batch, n_queries, 3)
+    points: jnp.ndarray,                  # (n_devices, max_points, 3)
+    centers: jnp.ndarray,                 # (n_devices, max_points, 3)
+    axes: jnp.ndarray,                    # (n_devices, max_points, 2)
+    major_radii: jnp.ndarray,             # (n_devices, max_points)
+    minor_radii: jnp.ndarray,             # (n_devices, max_points)
+    neighborhood_radii: jnp.ndarray,      # (n_devices, max_points)
+    uncertainties: jnp.ndarray,           # (n_devices, max_points)
+    n_chunks: int = 8
+):
+    assert queries.shape[2]%n_chunks == 0
+    result_dist, result_grad, result_uncertainty, = ([], [], [])
+    chunk_size = queries.shape[2]//n_chunks
+
+    for i in range(0, queries.shape[2], chunk_size):
+        these_queries = jnp.asarray(queries[:, :, i : i + chunk_size])
+        dist, grad, normed_uncertainty, _, _ = torus_distance_gradient_masked_with_clamp(
+            mask, these_queries, points, centers, axes, major_radii, minor_radii, neighborhood_radii, uncertainties
+        )
+        result_dist.append(np.asarray(dist))
+        result_grad.append(np.asarray(grad))
+        result_uncertainty.append(np.asarray(normed_uncertainty))
+
+    return np.concatenate(result_dist, axis=2), np.concatenate(result_grad, axis=2), np.concatenate(result_uncertainty, axis=2)
 
 # ========================================================================
 # EXPORT FOR VISUALIZATION
