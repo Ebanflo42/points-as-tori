@@ -78,7 +78,8 @@ def raymarch_jax(points: jnp.ndarray,
         d, _, _, = torus_distance_gradient_masked_with_clamp_chunked(
             mask, p[np.newaxis, np.newaxis], points, centers,
             axes, major_radii, minor_radii,
-            neighborhood_radii, uncertainties
+            neighborhood_radii, uncertainties,
+            n_chunks=16
         )
         #print(d[jnp.newaxis, :, 0])
         #print(t.shape, d.shape)
@@ -99,7 +100,7 @@ def raymarch_jax(points: jnp.ndarray,
     brightness = jnp.maximum(0.2, normals[..., 1])
     print(normalized_uncertainties.shape, normals.shape, brightness.shape)
     img = hsv_to_rgb(jnp.stack((normalized_uncertainties[0, 0], brightness[0, 0], brightness[0, 0]), axis=-1))
-    img = jnp.where(hit, jnp.ones_like(img), jnp.zeros_like(img))
+    img = jnp.where(hit, img, jnp.zeros_like(img))
     return img.reshape((400, 400, 3))
 
 
@@ -145,10 +146,10 @@ def cross_section_occupancy(points: jnp.ndarray,
 
 if __name__ == "__main__":
     print("Loading model . . .")
-    model = load_model(os.path.abspath("models/UncertaintyTest5/UncertaintyTest5_phase0"))
+    model = load_model(os.path.abspath("models/UncertaintyTest6/UncertaintyTest6_phase2"))
 
     print("Loading point cloud . . .")
-    points, normals, neighbors = load_block()
+    points, normals, neighbors = load_snail()
     print(f"x y z min max {points[:, 0].min()} {points[:, 0].max()} {points[:, 0].max()} {points[:, 1].min()} {points[:, 1].max()} {points[:, 2].min()} {points[:, 2].max()}")
     n_points = len(points)
     mask = jnp.ones((1, n_points), dtype=jnp.bool)
@@ -176,7 +177,7 @@ if __name__ == "__main__":
     print(axes.shape)
 
     print("Raymarching . . .")
-    img = cross_section_occupancy(
+    img = raymarch_jax(
         points[np.newaxis],
         centers,
         axes,
@@ -194,4 +195,4 @@ if __name__ == "__main__":
     fig = plt.figure()
     ax = fig.add_subplot()
     ax.imshow(img)
-    plt.savefig("raymarch_test.png")
+    plt.savefig("raymarch_test2.png")
