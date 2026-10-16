@@ -279,7 +279,7 @@ double TorusDistanceField::evaluate_distance_single(const Eigen::Vector3d& q, co
         lam *= radius_evaluation / std::sqrt(3.0);
     }
 
-    double g = 0.;
+    double g = 1e8;
     for (int i : neighbors) {
         if (is_outlier(i) == 1) continue;
         const Eigen::Vector3d& p_i = points.col(i);
@@ -292,14 +292,16 @@ double TorusDistanceField::evaluate_distance_single(const Eigen::Vector3d& q, co
         }
         Eigen::Vector3d center = centers.col(i);
         double g_z = torus_signed_distance(q, center, axes.col(i), major_radii(i), minor_radii(i));
-        double d_sphere = (q - p_i).norm() - 0.1;
+        double d_sphere = (q - p_i).norm() - 0.25*minor_radii(i);
         g_z = max(d_sphere, g_z);
-        g += weight * g_z;
-        normalization += weight;
+        //g += weight * g_z;
+        //normalization += weight;
+        //std::cout << "g: " << g << " " << g_z << std::endl;
+        g = min(g_z, g);
     }
 
-    double dist = g / normalization;
-    return dist - isovalue;
+    double dist = g;// normalization;
+    return dist;
 }
 
 Eigen::Vector3d TorusDistanceField::evaluate_gradient_single(const Eigen::Vector3d& query, const double& shift,

@@ -7,6 +7,7 @@ import pointsastori as pat
 import matplotlib.pyplot as plt
 
 from typing import *
+from tqdm import tqdm
 from scipy.spatial import KDTree
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -25,7 +26,7 @@ def raymarch(pat_sdf: pat.PointsAsTori) -> np.ndarray:
         p = ro + t*rd
         #print(p.dtype, p.shape, t.shape, d.shape)
         d = pat_sdf.signed_distance(p)[:, np.newaxis]
-        #print(d.min(), d.max(), t.min(), t.max())
+        print(d.min(), d.max(), t.min(), t.max())
         #print(p.dtype, p.shape, t.shape, d.shape)
         t += np.clip(d, 0, 1)
 
@@ -39,23 +40,26 @@ def raymarch(pat_sdf: pat.PointsAsTori) -> np.ndarray:
 
 def process_example(name: str, shape: pat.shape_3d.TriangleMesh):
 
+    if name not in ["123DCreature:Thundercrab", "Weeklycupnr6-Valentine", "Bird(forputtingonthings)"]:
+        return
+
     # construct points as tori, using both nn and linear least squares
     points = shape.vertices
     normals = shape.vertex_normals
-    pat_neural = pat.PointsAsTori(points, normals, chunk_size=5000)
-    pat_neural.save_tori(f"tori/{name}/neural/tori.pkl")
+    #pat_neural = pat.PointsAsTori(points, normals, chunk_size=5000)
+    #pat_neural.save_tori(f"tori/{name}/neural/tori.pkl")
     pat_linear = pat.PointsAsTori(points, normals, chunk_size=5000, use_linear_least_squares=True)
     pat_linear.save_tori(f"tori/{name}/linear/tori.pkl")
 
     print(f"Raymarching {name} . . .")
-    neural_raymarch = raymarch(pat_neural)
+    #neural_raymarch = raymarch(pat_neural)
     linear_raymarch = raymarch(pat_linear)
 
-    fig = plt.figure()
-    ax = fig.add_subplot()
-    ax.imshow(neural_raymarch)
-    plt.savefig(f"tori/{name}/neural/raymarch.png")
-    plt.close('all')
+    #fig = plt.figure()
+    #ax = fig.add_subplot()
+    #ax.imshow(neural_raymarch)
+    #plt.savefig(f"tori/{name}/neural/raymarch.png")
+    #plt.close('all')
 
     fig = plt.figure()
     ax = fig.add_subplot()

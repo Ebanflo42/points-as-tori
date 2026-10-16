@@ -1142,8 +1142,8 @@ class FundamentalFormPredictor(nnx.Module):
 		n_chunks = (n_points + chunk_size - 1) // chunk_size
 		t0 = time.time()
 
-		if use_linear_least_squares:
-			jit_least_squares = jax.jit(least_squares_coefficients)
+		#if use_linear_least_squares:
+		#	jit_least_squares = jax.jit(least_squares_coefficients)
 
 		for chunk_idx in range(n_chunks):
 			start_idx = chunk_idx * chunk_size
@@ -1155,18 +1155,18 @@ class FundamentalFormPredictor(nnx.Module):
 			chunk_normals = normals[chunk_indices]  # (chunk_size, k, 3)
 
 			if use_linear_least_squares:
-				chunk_coeffs = jit_least_squares(chunk_points, chunk_normals)
+				chunk_coeffs_cpu = least_squares_coefficients(chunk_points, chunk_normals)
 
 			else:
 				# Forward pass for this chunk
 				chunk_coeffs = self(chunk_points, chunk_normals)
+				# Wait for GPU to finish and transfer to CPU
+				chunk_coeffs_cpu = np.array(chunk_coeffs.block_until_ready())
+				del chunk_coeffs
 
-			# Wait for GPU to finish and transfer to CPU
-			chunk_coeffs_cpu = np.array(chunk_coeffs.block_until_ready())
 			all_coefficients.append(chunk_coeffs_cpu)
 
 			# Clear JAX cache for this chunk
-			del chunk_coeffs
 
 			if (chunk_idx + 1) % 10 == 0:
 				print(f'	{chunk_idx + 1}/{n_chunks} chunks processed')
