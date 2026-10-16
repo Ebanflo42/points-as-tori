@@ -212,14 +212,14 @@ def _compute_weights_and_grads_from_distances_sharded(
     rHat = rVec / jnp.maximum(NAN_EPSILON, distances)
     print(f"RHAT SHAPE {rHat.shape}")
 
-    m = mask[:, jnp.newaxis, jnp.newaxis, :, jnp.newaxis]  # (n_devices, 1, 1, max_points, 1)
+    m = mask[:, jnp.newaxis, :, jnp.newaxis]  # (n_devices, 1, max_points, 1)
 
     # top_k on negated distances: invalid points → -inf so they're never selected.
     neg_distances = jnp.where(m, -distances, -jnp.inf)
 
     # assume for now that there are at least 64 valid points in the point cloud (reasonable assumption)
     k = 64
-    max_points = distances.shape[-1]
+    max_points = distances.shape[-2]
     k_actual = min(k, max_points)
 
     # get top 64 closest distances
@@ -237,6 +237,7 @@ def _compute_weights_and_grads_from_distances_sharded(
     # exponential coefficients decrease with the distance of the furthest point
     # (device, batch, n_queries, 1)
     lambdas = 128.0/jnp.maximum(NAN_EPSILON, max_distances)
+    print(f"MAX DISTANCES CLOSEST POINTS SHAPE {max_distances.shape} {closest_points_mask.shape} {indices.shape}")
 
     # compute the gradient of lambdas
     idx = indices[..., -1, jnp.newaxis]
@@ -247,13 +248,15 @@ def _compute_weights_and_grads_from_distances_sharded(
     max_logits = -jnp.min(-closest_points_mask*logits, axis=-1, keepdims=True)
     weights = closest_points_mask*jnp.exp(closest_points_mask*logits - max_logits)
     print(f"WEIGHTS SHAPE {weights.shape}")
-    normalization = jnp.sum(weights, axis=(3, 4))
+    normalization = jnp.sum(weights, axis=2)
 
     # compute the gradients of the weights above
     grad_weights = closest_points_mask*weights*(
         -grad_lambdas[..., jnp.newaxis, :]*distances - lambdas[..., jnp.newaxis]*rHat
     )
-    grad_normalization = jnp.sum(grad_weights, axis=-2)
+    grad_normalization = jnp.sum(grad_weights, axis=2)
+
+    print(f"NORMALIZATION GRADNORMALIZATION {normalization.shape} {grad_normalization.shape}")
 
     return distances, rHat, weights, grad_weights, normalization, grad_normalization
 
@@ -631,7 +634,7 @@ def torus_distance_gradient_masked(
 @jit
 def torus_distance_gradient_masked_with_clamp(
     mask: jnp.ndarray,                    # (n_devices, max_points)
-    queries: jnp.ndarray,                 # (n_devices, batch, n_queries, 3)
+    queries: jnp.ndarray,                 # (n_devices, batch, 3)
     points: jnp.ndarray,                  # (n_devices, max_points, 3)
     centers: jnp.ndarray,                 # (n_devices, max_points, 3)
     axes: jnp.ndarray,                    # (n_devices, max_points, 2)
@@ -640,7 +643,7 @@ def torus_distance_gradient_masked_with_clamp(
     neighborhood_radii: jnp.ndarray,      # (n_devices, max_points)
     uncertainties: jnp.ndarray,           # (n_devices, max_points)
 ):
-    n_devices, batch_size, n_queries, _ = queries.shape
+    n_devices, batch_size, _ = queries.shape
 
     # --- Validity mask: keep the device axis ---
     valid_torus_mask = (
@@ -655,44 +658,41 @@ def torus_distance_gradient_masked_with_clamp(
 
     # --- Broadcasting: q and p_i are 5D with device axis first ---
     # (D, B, Q, 1, 3)
-    q = queries[:, :, :, jnp.newaxis]      # (D, B, Q, 1, 3)
-    p_i = points[:, jnp.newaxis, jnp.newaxis]  # (D, 1, 1, P, 3)
-    rVec = q - p_i                     # (D, B, Q, P, 3)
+    q = queries[:, :, jnp.newaxis] # (D, B, 1, 3)
+    p_i = points[:, jnp.newaxis] # (D, 1, P, 3)
 
     # Compute query-to-point distances once and reuse for both shift and weight computation.
     # This avoids materializing the (batch, n_queries, max_points) distance tensor twice.
-    rVec = q - p_i  # (batch, n_queries, max_points, 3)
-    # dist_to_point (device, batch, query, point)
-    # rHat (device, batch, query, point, 3)
+    rVec = q - p_i  # (device, batch, max_points, 3)
+    print(f"RVEC SHAPE {rVec.shape}")
     dist_to_point, rHat, weights, grad_weights, normalization, grad_normalization = \
         _compute_weights_and_grads_from_distances_sharded(rVec, mask)
-    print(f"WEIGHTS GRADWEIGHTS NORMALIZATION GRADNORMALIZATION {weights.shape} {grad_weights.shape} {normalization.shape} {grad_normalization.shape}")
 
     # Torus parameters, broadcast to (D, 1, 1, P, ...)
-    c_i = centers[:, jnp.newaxis, jnp.newaxis, :, :]      # (D, 1, 1, P, 3)
-    axis_i = axis3d[:, jnp.newaxis, jnp.newaxis, :, :]    # (D, 1, 1, P, 3)
-    R_i = major_radii[:, jnp.newaxis, jnp.newaxis, :]     # (D, 1, 1, P)
-    r_i = minor_radii[:, jnp.newaxis, jnp.newaxis, :]     # (D, 1, 1, P)
-    mask_i = valid_torus_mask[:, jnp.newaxis, jnp.newaxis, :]  # (D, 1, 1, P)
+    c_i = centers[:, jnp.newaxis]      # (D, 1, P, 3)
+    axis_i = axis3d[:, jnp.newaxis]    # (D, 1, P, 3)
+    R_i = major_radii[:, jnp.newaxis]     # (D, 1, P)
+    r_i = minor_radii[:, jnp.newaxis]     # (D, 1, P)
+    mask_i = valid_torus_mask[:, jnp.newaxis, :]  # (D, 1, P)
 
-    r_vec = q - c_i                         # (D, B, Q, P, 3)
-    cross_prod = jnp.cross(r_vec, axis_i)   # (D, B, Q, P, 3)
-    v = jnp.linalg.norm(cross_prod, axis=-1)  # (D, B, Q, P)
+    r_vec = q - c_i                         # (D, B, P, 3)
+    cross_prod = jnp.cross(r_vec, axis_i)   # (D, B, P, 3)
+    v = jnp.linalg.norm(cross_prod, axis=-1)  # (D, B, P)
 
-    d1 = v - R_i                            # (D, B, Q, P)
-    d2 = jnp.sum(r_vec * axis_i, axis=-1)   # (D, B, Q, P)
-    d  = jnp.sqrt(d1**2 + d2**2)            # (D, B, Q, P)
+    d1 = v - R_i                            # (D, B, P)
+    d2 = jnp.sum(r_vec * axis_i, axis=-1)   # (D, B, P)
+    d  = jnp.sqrt(d1**2 + d2**2)            # (D, B, P)
     print(f"d r_i shape {d.shape} {r_i.shape}")
 
-    s = jnp.sign(r_i)                       # (D, 1, 1, P)
-    g_z = s * (d - jnp.abs(r_i))            # (D, B, Q, P)
+    s = jnp.sign(r_i)                       # (D, 1, P)
+    g_z = s * (d - jnp.abs(r_i))            # (D, B, P)
     print(f"g_z {g_z.shape}")
-    g_z = jnp.where(mask_i, g_z, 0.0)      # (D, B, Q, P)
+    g_z_ = jnp.where(mask_i, g_z, 0.0)      # (D, B, P)
     #print(f"g_z_ {g_z_.shape}")
 
-    #sphere_dist = dist_to_point[..., 0] - neighborhood_radii[:, jnp.newaxis, jnp.newaxis]
-    #             (D, B, Q, P)  - (D, 1, 1, P) -> (D, B, Q, P)
-    #g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
+    sphere_dist = dist_to_point[..., 0] - neighborhood_radii[:, jnp.newaxis]
+    #             (D, B, P)  - (D, 1, P) -> (D, B, P)
+    g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
 
     # --- Torus gradient (same math, all arrays are 5D with device axis) ---
     v_safe = jnp.maximum(v, NAN_EPSILON)
@@ -728,26 +728,26 @@ def torus_distance_gradient_masked_with_clamp(
     grad_x = jnp.where(mask_i, grad_x, 0.0)
     grad_y = jnp.where(mask_i, grad_y, 0.0)
     grad_z = jnp.where(mask_i, grad_z, 0.0)
-    grad_g = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (D, B, Q, P, 3)
-    #grad_g = jnp.where(sphere_dist[..., jnp.newaxis] > g_z_[..., jnp.newaxis], rHat, grad_g_)
+    grad_g_ = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (D, B, Q, P, 3)
+    grad_g = jnp.where(sphere_dist[..., jnp.newaxis] > g_z_[..., jnp.newaxis], rHat, grad_g_)
 
     g = jnp.sum(weights[..., 0] * g_z, axis=-1)  # (batch, n_queries)
     normalization_safe = jnp.maximum(normalization, NAN_EPSILON)
-    dist = g / normalization_safe
+    dist = g / normalization_safe[..., 0]
 
     print(f"GRAD WEIGHTS GZ SHAPE {grad_weights.shape} {g_z.shape}")
-    normalized_term1 = jnp.sum(grad_weights*g_z[..., jnp.newaxis], axis=-2)/normalization_safe[..., jnp.newaxis]
+    normalized_term1 = jnp.sum(grad_weights*g_z[..., jnp.newaxis], axis=-2)/normalization_safe
 
-    normalized_term2 = jnp.sum(weights*grad_g, axis=-2)/normalization_safe[..., jnp.newaxis]
+    normalized_term2 = jnp.sum(weights*grad_g, axis=-2)/normalization_safe
 
-    normalized_term3 = -dist[..., jnp.newaxis]*grad_normalization/normalization_safe[..., jnp.newaxis]
+    normalized_term3 = -dist[..., jnp.newaxis]*grad_normalization/normalization_safe
 
     grad = normalized_term1 + normalized_term2 + normalized_term3
 
     weighted_uncertainty = jnp.sum(
-        weights[..., 0] * uncertainties[:, :, jnp.newaxis, jnp.newaxis], axis=-1
-    )  # (D, B, Q)
-    normalized_uncertainty = weighted_uncertainty/normalization_safe
+        weights[..., 0] * uncertainties[:, jnp.newaxis], axis=-1
+    )  # (D, B)
+    normalized_uncertainty = weighted_uncertainty/normalization_safe[..., 0]
 
     return dist, grad, normalized_uncertainty
 
@@ -1191,7 +1191,7 @@ class TransformerBlock(nnx.Module):
         # feed-forward network
         self.ffn = nnx.Sequential(
             nnx.Linear(embed_dim, mlp_dim, rngs=rngs),
-            nnx.gelu,
+            nnx.relu,
             nnx.Dropout(rate=dropout_rate, rngs=rngs),
             nnx.Linear(mlp_dim, embed_dim, rngs=rngs),
             nnx.Dropout(rate=dropout_rate, rngs=rngs),
@@ -1307,10 +1307,10 @@ class InputFeaturesWithUncertainty(nnx.Module):
 
         # A linear projection simply to match transformer dimension
         self.mlp = nnx.Sequential(
-            nnx.Linear(input_dim, 4*output_dim, rngs=rngs),
-            nnx.LayerNorm(4*output_dim, rngs=rngs),  # LayerNorm seems to really help here
+            nnx.Linear(input_dim, 2*output_dim, rngs=rngs),
+            nnx.LayerNorm(2*output_dim, rngs=rngs),  # LayerNorm seems to really help here
             nnx.relu,
-            nnx.Linear(4*output_dim, output_dim, rngs=rngs),
+            nnx.Linear(2*output_dim, output_dim, rngs=rngs),
             nnx.LayerNorm(output_dim, rngs=rngs),  # LayerNorm seems to really help here
         )
 
@@ -1598,8 +1598,6 @@ class FundamentalFormPredictorWithUncertainty(nnx.Module):
         Returns:
             coefficients: [batch, 6] (a00, a01, a10, a11, a02, a20)
         """
-        print("POSITIONS SHAPE")
-        print(positions.shape)
         n_shapes, batch_size, k, d = positions.shape
 
         # input_features: [batch, k, embed_dim]
