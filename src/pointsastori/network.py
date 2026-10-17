@@ -231,30 +231,32 @@ def _compute_weights_and_grads_from_distances_sharded(
     # maximum distance of the closest 64 points
     # (device, batch, n_queries, 1)
     max_distances = knn_dists[..., -1, :]
+    min_distances = knn_dists[..., 0, :]
     # masks all points which are not in the top 64
     # (device, batch, n_queries, max_points)
     closest_points_mask = (distances <= max_distances[..., jnp.newaxis]).astype(jnp.float32)
     # exponential coefficients decrease with the distance of the furthest point
     # (device, batch, n_queries, 1)
-    lambdas = 1536.0/jnp.maximum(NAN_EPSILON, max_distances)
+    lambdas = 128.0/jnp.maximum(NAN_EPSILON, max_distances)
     print(f"MAX DISTANCES CLOSEST POINTS SHAPE {max_distances.shape} {closest_points_mask.shape} {indices.shape}")
 
     # compute the gradient of lambdas
-    idx = indices[..., -1, jnp.newaxis]
-    exact_diff = jnp.take_along_axis(rHat, idx, axis=-2)[..., 0, :]
-    grad_lambdas = -1536.0*exact_diff/jnp.maximum(NAN_EPSILON, max_distances**2)
+    max_dist_rhat = jnp.take_along_axis(rHat, indices[..., -1, jnp.newaxis], axis=-2)[..., 0, :]
+    min_dist_rhat = jnp.take_along_axis(rHat, indices[..., 0, jnp.newaxis], axis=-2)[..., 0, :]
+    grad_lambdas = -128.0*max_dist_rhat/jnp.maximum(NAN_EPSILON, max_distances**2)
 
     #logits = -lambdas[..., jnp.newaxis]*distances
     #max_logits = -jnp.min(-closest_points_mask*logits, axis=-1, keepdims=True)
-    weights = closest_points_mask*jnp.exp(closest_points_mask*lambdas[..., jnp.newaxis]*(distances - max_distances[..., jnp.newaxis]))
+    shifted_distances = distances - min_distances[..., jnp.newaxis]
+    weights = closest_points_mask*jnp.exp(-lambdas[..., jnp.newaxis]*shifted_distances)
     weights = jnp.where(jnp.isnan(weights), 1, weights)
     #weights = closest_points_mask*jnp.exp(-128*(distances )
     print(f"WEIGHTS SHAPE {weights.shape}")
     normalization = jnp.sum(weights, axis=2)
 
     # compute the gradients of the weights above
-    grad_weights = closest_points_mask*weights*(
-        -grad_lambdas[..., jnp.newaxis, :]*distances - lambdas[..., jnp.newaxis]*rHat
+    grad_weights = weights*(
+        -grad_lambdas[..., jnp.newaxis, :]*shifted_distances - lambdas[..., jnp.newaxis]*(rHat - min_dist_rhat[..., jnp.newaxis, :])
     )
     grad_normalization = jnp.sum(grad_weights, axis=2)
 
