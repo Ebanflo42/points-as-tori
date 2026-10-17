@@ -231,28 +231,32 @@ def _compute_weights_and_grads_from_distances_sharded(
     # maximum distance of the closest 64 points
     # (device, batch, n_queries, 1)
     max_distances = knn_dists[..., -1, :]
+    min_distances = knn_dists[..., 0, :]
     # masks all points which are not in the top 64
     # (device, batch, n_queries, max_points)
     closest_points_mask = (distances <= max_distances[..., jnp.newaxis]).astype(jnp.float32)
     # exponential coefficients decrease with the distance of the furthest point
     # (device, batch, n_queries, 1)
-    lambdas = 1.0/jnp.maximum(NAN_EPSILON, max_distances)
+    lambdas = 128.0/jnp.maximum(NAN_EPSILON, max_distances)
     print(f"MAX DISTANCES CLOSEST POINTS SHAPE {max_distances.shape} {closest_points_mask.shape} {indices.shape}")
 
     # compute the gradient of lambdas
-    idx = indices[..., -1, jnp.newaxis]
-    exact_diff = jnp.take_along_axis(rHat, idx, axis=-2)[..., 0, :]
-    grad_lambdas = -1.0*exact_diff/jnp.maximum(NAN_EPSILON, max_distances**2)
+    max_dist_rhat = jnp.take_along_axis(rHat, indices[..., -1, jnp.newaxis], axis=-2)[..., 0, :]
+    min_dist_rhat = jnp.take_along_axis(rHat, indices[..., 0, jnp.newaxis], axis=-2)[..., 0, :]
+    grad_lambdas = -128.0*max_dist_rhat/jnp.maximum(NAN_EPSILON, max_distances**2)
 
-    logits = -lambdas[..., jnp.newaxis]*distances
-    max_logits = -jnp.min(-closest_points_mask*logits, axis=-1, keepdims=True)
-    weights = closest_points_mask*jnp.exp(closest_points_mask*logits - max_logits)
+    #logits = -lambdas[..., jnp.newaxis]*distances
+    #max_logits = -jnp.min(-closest_points_mask*logits, axis=-1, keepdims=True)
+    shifted_distances = distances - min_distances[..., jnp.newaxis]
+    weights = closest_points_mask*jnp.exp(-lambdas[..., jnp.newaxis]*shifted_distances)
+    weights = jnp.where(jnp.isnan(weights), 1, weights)
+    #weights = closest_points_mask*jnp.exp(-128*(distances )
     print(f"WEIGHTS SHAPE {weights.shape}")
     normalization = jnp.sum(weights, axis=2)
 
     # compute the gradients of the weights above
-    grad_weights = closest_points_mask*weights*(
-        -grad_lambdas[..., jnp.newaxis, :]*distances - lambdas[..., jnp.newaxis]*rHat
+    grad_weights = weights*(
+        -grad_lambdas[..., jnp.newaxis, :]*shifted_distances - lambdas[..., jnp.newaxis]*(rHat - min_dist_rhat[..., jnp.newaxis, :])
     )
     grad_normalization = jnp.sum(grad_weights, axis=2)
 
@@ -749,6 +753,11 @@ def torus_distance_gradient_masked_with_clamp(
     )  # (D, B)
     normalized_uncertainty = weighted_uncertainty/normalization_safe[..., 0]
 
+    #weights = weights[..., 0]
+    #count = (weights > 0).astype(jnp.float32).sum(axis=-1, keepdims=True)
+    #mean = jnp.sum(weights, axis=-1, keepdims=True)/count
+    #variance = jnp.sum((weights > 0)*(weights - mean)**2, axis=-1, keepdims=True)/(count - 1)
+
     return dist, grad, normalized_uncertainty
 
 
@@ -764,12 +773,12 @@ def torus_distance_gradient_masked_with_clamp_chunked(
     uncertainties: jnp.ndarray,           # (n_devices, max_points)
     n_chunks: int = 800
 ):
-    assert queries.shape[2]%n_chunks == 0
+    assert queries.shape[1]%n_chunks == 0
     result_dist, result_grad, result_uncertainty, = ([], [], [])
-    chunk_size = queries.shape[2]//n_chunks
+    chunk_size = queries.shape[1]//n_chunks
 
-    for i in range(0, queries.shape[2], chunk_size):
-        these_queries = jnp.asarray(queries[:, :, i : i + chunk_size])
+    for i in range(0, queries.shape[1], chunk_size):
+        these_queries = jnp.asarray(queries[:, i : i + chunk_size])
         dist, grad, normed_uncertainty = torus_distance_gradient_masked_with_clamp(
             mask, these_queries, points, centers, axes, major_radii, minor_radii, neighborhood_radii, uncertainties
         )
@@ -777,7 +786,7 @@ def torus_distance_gradient_masked_with_clamp_chunked(
         result_grad.append(np.asarray(grad))
         result_uncertainty.append(np.asarray(normed_uncertainty))
 
-    return np.concatenate(result_dist, axis=2), np.concatenate(result_grad, axis=2), np.concatenate(result_uncertainty, axis=2)
+    return np.concatenate(result_dist, axis=1), np.concatenate(result_grad, axis=1), np.concatenate(result_uncertainty, axis=1)
 
 # ========================================================================
 # EXPORT FOR VISUALIZATION

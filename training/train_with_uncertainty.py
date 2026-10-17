@@ -296,7 +296,7 @@ def TrainFundamentalFormPredictor(
     n_freq = 0
     n_layers = 6
     n_heads = 8
-    mlp_dim = embed_dim * 2
+    mlp_dim = embed_dim * 4
 
     # Sampling
     n_queries_per_neighborhood = 120
@@ -396,31 +396,6 @@ def TrainFundamentalFormPredictor(
         _, state = nnx.split(curr_model)
         path = os.path.join(os.getcwd(), f'models/{model_name}/{save_filepath}')
         checkpointer.save(path, state)
-    """
-        curr_model.eval()
-
-        # Extract only data (parameters), do not save graphdef
-        state = nnx.state(curr_model)  # or use nnx.state(curr_model, nnx.Param)
-        # Convert to pure dictionary (containing only arrays)
-        #pure_state = nnx.to_pure_dict(state)
-
-        saved_data = {
-            'state': state,  # Pure dict, no functions
-            'embed_dim': embed_dim,
-            'n_freq': n_freq,
-            'n_heads': n_heads,
-            'n_layers': n_layers,
-            'mlp_dim': mlp_dim,
-            'dropout_rate': dropout_rate,
-        }
-        if epoch == num_epochs - 1:
-            path = save_filepath + '.pkl'
-        else:
-            path = save_filepath + f'_{epoch}.pkl'
-        with open(path, 'wb') as f:
-            pickle.dump(saved_data, f)
-        print(f'Model saved to {save_filepath}')
-    """
 
     # ---- Training loop ----
     model.train()
@@ -726,7 +701,7 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "UncertaintyTest2"
+    model_name = "UncertaintyTest3"
 
     # Phase 0: nicely sampled blobs
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))

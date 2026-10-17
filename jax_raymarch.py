@@ -76,20 +76,20 @@ def raymarch_jax(points: jnp.ndarray,
 
         #print(mask.shape, centers.shape, axes.shape, minor_radii.shape, major_radii.shape)
         d, _, _, = torus_distance_gradient_masked_with_clamp_chunked(
-            mask, p[np.newaxis, np.newaxis], points, centers,
+            mask, p[np.newaxis], points, centers,
             axes, major_radii, minor_radii,
             neighborhood_radii, uncertainties,
             n_chunks=16
         )
         #print(d[jnp.newaxis, :, 0])
         #print(t.shape, d.shape)
-        t += np.clip(d[0, 0, :, np.newaxis], -1, 1)
+        t += np.clip(-d[0, :, np.newaxis], -1, 1)
 
     print(f"d shape t shape {d.shape} {t.shape}")
-    hit = np.logical_and(d[0, 0, :, jnp.newaxis] < 1e-3, t < 1e2)
+    hit = np.logical_and(d[0, :, jnp.newaxis] < 1e-3, t < 1e2)
 
     _, grads, weighted_uncertainties = torus_distance_gradient_masked_with_clamp_chunked(
-        mask, p[np.newaxis, np.newaxis], points, centers,
+        mask, p[np.newaxis], points, centers,
         axes, major_radii, minor_radii,
         neighborhood_radii, uncertainties
     )
@@ -129,7 +129,7 @@ def cross_section_occupancy(points: jnp.ndarray,
     #print(mask.shape, centers.shape, axes.shape, minor_radii.shape, major_radii.shape)
     print(xyz.shape)
     d, _, _, = torus_distance_gradient_masked_with_clamp_chunked(
-        mask, xyz[np.newaxis, np.newaxis], points, centers,
+        mask, xyz[np.newaxis], points, centers,
         axes, major_radii, minor_radii,
         neighborhood_radii, uncertainties
     )
@@ -146,7 +146,7 @@ def cross_section_occupancy(points: jnp.ndarray,
 
 if __name__ == "__main__":
     print("Loading model . . .")
-    model = load_model(os.path.abspath("models/UncertaintyTest6/UncertaintyTest6_phase2"))
+    model = load_model(os.path.abspath("models/sleipner/UncertaintyTest2/UncertaintyTest2_phase2"))
 
     print("Loading point cloud . . .")
     points, normals, neighbors = load_snail()
@@ -177,7 +177,7 @@ if __name__ == "__main__":
     print(axes.shape)
 
     print("Raymarching . . .")
-    img = raymarch_jax(
+    img = cross_section_occupancy(
         points[np.newaxis],
         centers,
         axes,
@@ -194,5 +194,6 @@ if __name__ == "__main__":
     #print(f"IMG DTYPE {img.dtype}")
     fig = plt.figure()
     ax = fig.add_subplot()
-    ax.imshow(img)
-    plt.savefig("raymarch_test2.png")
+    img = ax.imshow(img)
+    fig.colorbar(img, ax=ax)
+    plt.savefig("raymarch_test20.png")
