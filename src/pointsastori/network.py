@@ -236,13 +236,13 @@ def _compute_weights_and_grads_from_distances_sharded(
     closest_points_mask = (distances <= max_distances[..., jnp.newaxis]).astype(jnp.float32)
     # exponential coefficients decrease with the distance of the furthest point
     # (device, batch, n_queries, 1)
-    lambdas = 128.0/jnp.maximum(NAN_EPSILON, max_distances)
+    lambdas = 1.0/jnp.maximum(NAN_EPSILON, max_distances)
     print(f"MAX DISTANCES CLOSEST POINTS SHAPE {max_distances.shape} {closest_points_mask.shape} {indices.shape}")
 
     # compute the gradient of lambdas
     idx = indices[..., -1, jnp.newaxis]
     exact_diff = jnp.take_along_axis(rHat, idx, axis=-2)[..., 0, :]
-    grad_lambdas = -128.0*exact_diff/jnp.maximum(NAN_EPSILON, max_distances**2)
+    grad_lambdas = -1.0*exact_diff/jnp.maximum(NAN_EPSILON, max_distances**2)
 
     logits = -lambdas[..., jnp.newaxis]*distances
     max_logits = -jnp.min(-closest_points_mask*logits, axis=-1, keepdims=True)
@@ -687,12 +687,12 @@ def torus_distance_gradient_masked_with_clamp(
     s = jnp.sign(r_i)                       # (D, 1, P)
     g_z = s * (d - jnp.abs(r_i))            # (D, B, P)
     print(f"g_z {g_z.shape}")
-    g_z_ = jnp.where(mask_i, g_z, 0.0)      # (D, B, P)
+    g_z = jnp.where(mask_i, g_z, 0.0)      # (D, B, P)
     #print(f"g_z_ {g_z_.shape}")
 
-    sphere_dist = dist_to_point[..., 0] - neighborhood_radii[:, jnp.newaxis]
+    #sphere_dist = dist_to_point[..., 0] - neighborhood_radii[:, jnp.newaxis]
     #             (D, B, P)  - (D, 1, P) -> (D, B, P)
-    g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
+    #g_z = jnp.maximum(sphere_dist, g_z_)    # (D, B, Q, P)
 
     # --- Torus gradient (same math, all arrays are 5D with device axis) ---
     v_safe = jnp.maximum(v, NAN_EPSILON)
@@ -728,8 +728,8 @@ def torus_distance_gradient_masked_with_clamp(
     grad_x = jnp.where(mask_i, grad_x, 0.0)
     grad_y = jnp.where(mask_i, grad_y, 0.0)
     grad_z = jnp.where(mask_i, grad_z, 0.0)
-    grad_g_ = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (D, B, Q, P, 3)
-    grad_g = jnp.where(sphere_dist[..., jnp.newaxis] > g_z_[..., jnp.newaxis], rHat, grad_g_)
+    grad_g = jnp.stack([grad_x, grad_y, grad_z], axis=-1)  # (D, B, Q, P, 3)
+    #grad_g = jnp.where(sphere_dist[..., jnp.newaxis] > g_z_[..., jnp.newaxis], rHat, grad_g_)
 
     g = jnp.sum(weights[..., 0] * g_z, axis=-1)  # (batch, n_queries)
     normalization_safe = jnp.maximum(normalization, NAN_EPSILON)

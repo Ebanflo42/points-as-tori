@@ -339,7 +339,7 @@ def TrainFundamentalFormPredictor(
     total_shapes = len(all_shape_indices)
     print(f'Total shapes across all datasets: {total_shapes}')
 
-    total_steps = 1 + (max_points*total_shapes) // (n_devices*batch_size)
+    total_steps = 1 + (num_epochs*n_queries_per_neighborhood*total_shapes) // (n_devices*batch_size)
 
     model, optimizer, train_step = FundamentalFormPredictorTrainer(
         model_name,
@@ -726,7 +726,7 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "UncertaintyTest1"
+    model_name = "UncertaintyTest2"
 
     # Phase 0: nicely sampled blobs
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
@@ -734,9 +734,9 @@ def train():
         model_name,
         training_data_filenames,
         num_epochs=10,
-        learning_rate=1e-3,
+        learning_rate=1e-4,
         warmup_steps=1e3,
-        batch_size=60,
+        batch_size=40,
         n_epochs_to_save=10,
         n_shapes_to_save=10,
         #load_model_path='models/FundamentalFormPredictor_pretrained.pkl',
@@ -754,7 +754,7 @@ def train():
         num_epochs=8,
         learning_rate=1e-4,
         warmup_steps=1e3,
-        batch_size=60,
+        batch_size=40,
         n_epochs_to_save=8,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase0',
@@ -772,7 +772,7 @@ def train():
         num_epochs=6,
         learning_rate=1e-5,
         warmup_steps=1e3,
-        batch_size=60,
+        batch_size=40,
         n_epochs_to_save=6,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase1',
@@ -787,9 +787,9 @@ def train():
         model_name,
         training_data_filenames,
         num_epochs=4,
-        learning_rate=1e-6,
+        learning_rate=1e-5,
         warmup_steps=1e3,
-        batch_size=60,
+        batch_size=40,
         n_epochs_to_save=4,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase2',
@@ -806,9 +806,9 @@ def train():
         model_name,
         training_data_filenames,
         num_epochs=2,
-        learning_rate=1e-7,
+        learning_rate=1e-6,
         warmup_steps=1e3,
-        batch_size=60,
+        batch_size=40,
         n_epochs_to_save=2,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase3',
