@@ -1296,7 +1296,7 @@ class InputFeaturesWithUncertainty(nnx.Module):
     Turn a neighborhood (point positions & their normals) to the input features to be fed into the neural network.
     """
 
-    def __init__(self, output_dim: int, n_freq: int = 0, *, rngs: nnx.Rngs):
+    def __init__(self, mlp_dim: int, output_dim: int, n_freq: int = 0, *, rngs: nnx.Rngs):
         # Input features: local coordinates (3), normals in local coordinates (3)
         input_dim = 6
 
@@ -1307,10 +1307,10 @@ class InputFeaturesWithUncertainty(nnx.Module):
 
         # A linear projection simply to match transformer dimension
         self.mlp = nnx.Sequential(
-            nnx.Linear(input_dim, 2*output_dim, rngs=rngs),
-            nnx.LayerNorm(2*output_dim, rngs=rngs),  # LayerNorm seems to really help here
+            nnx.Linear(input_dim, mlp_dim, rngs=rngs),
+            nnx.LayerNorm(mlp_dim, rngs=rngs),  # LayerNorm seems to really help here
             nnx.relu,
-            nnx.Linear(2*output_dim, output_dim, rngs=rngs),
+            nnx.Linear(mlp_dim, output_dim, rngs=rngs),
             nnx.LayerNorm(output_dim, rngs=rngs),  # LayerNorm seems to really help here
         )
 
@@ -1568,7 +1568,7 @@ class FundamentalFormPredictorWithUncertainty(nnx.Module):
             n_layers: Number of TransformerBlocks.
         """
 
-        self.input_encoder = InputFeaturesWithUncertainty(embed_dim, n_freq=n_freq, rngs=rngs)
+        self.input_encoder = InputFeaturesWithUncertainty(mlp_dim, embed_dim, n_freq=n_freq, rngs=rngs)
 
         self.blocks = nnx.List(
             [TransformerBlock(embed_dim, n_heads, mlp_dim, dropout_rate, rngs=rngs) for _ in range(n_layers)]
