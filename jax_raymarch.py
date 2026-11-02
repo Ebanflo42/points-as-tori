@@ -8,6 +8,9 @@ import matplotlib.pyplot as plt
 import orbax.checkpoint as ocp
 import jax.numpy as jnp
 
+from matplotlib.colors import ListedColormap
+from matplotlib.cm import ScalarMappable
+
 from pointsastori.network import FundamentalFormPredictorWithUncertainty, torus_distance_gradient_masked_with_clamp_chunked, torus_precompute_masked_sharded
 from pointsastori.shape_3d import PointCloud3D, TriangleMesh, get_neighbors
 
@@ -39,6 +42,12 @@ def load_block() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     return 0.05*mesh.vertices, mesh.vertex_normals, neighbors
 
 
+def load_femur() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    mesh = TriangleMesh.read_OBJ("data/femur.obj")
+    neighbors = get_neighbors(mesh.vertices, 64)
+    return 0.05*mesh.vertices, mesh.vertex_normals, neighbors
+
+
 def hsv_to_rgb(hsv):
     h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
     i = jnp.floor(h * 6.0)
@@ -60,12 +69,12 @@ def raymarch_jax(points: jnp.ndarray,
                  minor_radii: jnp.ndarray,
                  neighborhood_radii: jnp.ndarray,
                  uncertainties: jnp.ndarray) -> jnp.ndarray:
-    ro = np.array([0, 0, 3])[np.newaxis]
+    ro = np.array([0, 3, 0.25])[np.newaxis]
     xy = np.stack(np.meshgrid(np.arange(-200, 200),
                               np.arange(-200, 200), indexing='ij'),
                             axis=-1).reshape((-1, 2)).astype(jnp.float32)
     xy /= 200
-    xyz = np.stack((xy[:, 1], xy[::-1, 0], 0.7*np.ones((400**2,))), axis=-1)
+    xyz = np.stack((xy[:, 1], -2.5*np.ones((400**2,)), 0.25 + xy[::-1, 0]), axis=-1)
     rd = xyz - ro
     rd /= np.linalg.norm(rd, axis=-1, keepdims=True)
     #rd = -rd
@@ -142,12 +151,24 @@ def cross_section_occupancy(points: jnp.ndarray,
     return d.reshape((400, 400))
 
 
+def set_size(w,h, ax=None):
+    """ w, h: width, height in inches """
+    if not ax: ax=plt.gca()
+    l = ax.figure.subplotpars.left
+    r = ax.figure.subplotpars.right
+    t = ax.figure.subplotpars.top
+    b = ax.figure.subplotpars.bottom
+    figw = float(w)/(r-l)
+    figh = float(h)/(t-b)
+    ax.figure.set_size_inches(figw, figh)
+
+
 if __name__ == "__main__":
     print("Loading model . . .")
     model = load_model(os.path.abspath("/media/ncs-tmp/Eben/torus-project/checkpoints/sleipner/UncertaintyTrial2/UncertaintyTrial2_phase3"))
 
     print("Loading point cloud . . .")
-    points, normals, neighbors = load_snail()
+    points, normals, neighbors = load_block()
     print(f"x y z min max {points[:, 0].min()} {points[:, 0].max()} {points[:, 0].max()} {points[:, 1].min()} {points[:, 1].max()} {points[:, 2].min()} {points[:, 2].max()}")
     n_points = len(points)
     mask = jnp.ones((1, n_points), dtype=jnp.bool)
@@ -184,14 +205,40 @@ if __name__ == "__main__":
         neighborhood_radii,
         uncertainties
     )
-    #print(f"IMG DTYPE {img.dtype}")
 
     img = np.array(img)
     print(np.mean(img))
-    #print(img.shape)
-    #print(f"IMG DTYPE {img.dtype}")
     fig = plt.figure()
-    ax = fig.add_subplot()
-    img = ax.imshow(img)
-    fig.colorbar(img, ax=ax)
-    plt.savefig("snail_raymarch1.png")
+
+    ax_scatter = fig.add_subplot()
+    ax_scatter.scatter(points[:, 0], points[:, 2], s=2)
+    ax_scatter.set_xticks([])
+    ax_scatter.set_yticks([])
+    ax_scatter.set_title("Input Pointcloud (Orthographic)")
+    ax_scatter.set_aspect('equal')
+    plt.savefig("block_points.png")
+    plt.close('all')
+
+    fig = plt.figure()
+
+    ax = fig.add_subplot(1, 2, 1)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_title("Uncertainty-Aware Reconstruction", fontsize=10)
+    ax.imshow(img)
+
+
+    print("Rendering colormap . . .")
+    hues = np.linspace(0.7, 0.0, num=200)[::-1]
+    colors = hsv_to_rgb(np.stack((hues, np.ones_like(hues), np.ones_like(hues)), axis=-1))
+    colors = np.repeat(colors[:, np.newaxis], 20, axis=1)
+    ax_col = fig.add_subplot(1, 2, 2)
+    ax_col.tick_params(left=False, right=True, labelleft=False, labelright=True)
+    ax_col.imshow(colors)
+    ax_col.set_xticks([])
+    ax_col.set_yticks([0, 199])
+    ax_col.set_yticklabels(["Most Uncertain", "Least Uncertain"])
+    #ax_col.set_aspect()
+    fig.tight_layout()
+    #set_size(5, 2.5, ax=ax_scatter)
+    plt.savefig("block_raymarch1.png")
