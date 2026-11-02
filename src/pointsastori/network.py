@@ -230,20 +230,19 @@ def _compute_weights_and_grads_from_distances_sharded(
 
     # maximum distance of the closest 64 points
     # (device, batch, n_queries, 1)
-    max_distances = knn_dists[..., -1, :]
+    max_distances = knn_dists[..., 1, :]
     min_distances = knn_dists[..., 0, :]
     # masks all points which are not in the top 64
     # (device, batch, n_queries, max_points)
     closest_points_mask = (distances <= max_distances[..., jnp.newaxis]).astype(jnp.float32)
     # exponential coefficients decrease with the distance of the furthest point
     # (device, batch, n_queries, 1)
-    lambdas = 128.0/jnp.maximum(NAN_EPSILON, max_distances)
-    print(f"MAX DISTANCES CLOSEST POINTS SHAPE {max_distances.shape} {closest_points_mask.shape} {indices.shape}")
+    lambdas = 0.5/jnp.maximum(NAN_EPSILON, max_distances)
 
     # compute the gradient of lambdas
-    max_dist_rhat = jnp.take_along_axis(rHat, indices[..., -1, jnp.newaxis], axis=-2)[..., 0, :]
+    max_dist_rhat = jnp.take_along_axis(rHat, indices[..., 1, jnp.newaxis], axis=-2)[..., 0, :]
     min_dist_rhat = jnp.take_along_axis(rHat, indices[..., 0, jnp.newaxis], axis=-2)[..., 0, :]
-    grad_lambdas = -128.0*max_dist_rhat/jnp.maximum(NAN_EPSILON, max_distances**2)
+    grad_lambdas = -0.5*max_dist_rhat/jnp.maximum(NAN_EPSILON, max_distances**2)
 
     #logits = -lambdas[..., jnp.newaxis]*distances
     #max_logits = -jnp.min(-closest_points_mask*logits, axis=-1, keepdims=True)
@@ -251,7 +250,6 @@ def _compute_weights_and_grads_from_distances_sharded(
     weights = closest_points_mask*jnp.exp(-lambdas[..., jnp.newaxis]*shifted_distances)
     weights = jnp.where(jnp.isnan(weights), 1, weights)
     #weights = closest_points_mask*jnp.exp(-128*(distances )
-    print(f"WEIGHTS SHAPE {weights.shape}")
     normalization = jnp.sum(weights, axis=2)
 
     # compute the gradients of the weights above
@@ -260,7 +258,6 @@ def _compute_weights_and_grads_from_distances_sharded(
     )
     grad_normalization = jnp.sum(grad_weights, axis=2)
 
-    print(f"NORMALIZATION GRADNORMALIZATION {normalization.shape} {grad_normalization.shape}")
 
     return distances, rHat, weights, grad_weights, normalization, grad_normalization
 
@@ -1714,39 +1711,3 @@ class FundamentalFormPredictorWithUncertainty(nnx.Module):
     def _drop_last_layer(self):
         self.blocks = self.blocks[:-1]
         self.n_layers -= 1
-
-    @staticmethod
-    def load_saved_model(filepath: str, drop_last_layer: bool):
-        with open(filepath, 'rb') as f:
-            saved_data = pickle.load(f)
-
-        n_freq = saved_data['n_freq'] if 'n_freq' in saved_data else 0
-
-        # 1. Rebuild model structure
-        loaded_model = FundamentalFormPredictor(
-            embed_dim=saved_data['embed_dim'],
-            n_freq=n_freq,
-            n_heads=saved_data['n_heads'],
-            n_layers=saved_data['n_layers'],
-            mlp_dim=saved_data['mlp_dim'],
-            dropout_rate=saved_data['dropout_rate'],
-            rngs=nnx.Rngs(0),
-        )
-
-        # 2. Get the model's current state structure (as nnx.State)
-        _, current_state = nnx.split(loaded_model)
-
-        # 3. Convert the saved pure dict back to nnx.State
-        saved_state = saved_data['state']
-        # If from_pure_dict isn't available in your version:
-        # saved_state = jax.tree.map(lambda x: x, current_state)  # placeholder
-        # saved_state = nnx.State(saved_data['state'])  # may need restructuring
-
-        # 4. Update the model's state with saved values
-        nnx.update(loaded_model, saved_state)
-
-        # 5. Replace mlp layer if needed (do this AFTER loading state)
-        if drop_last_layer:
-            loaded_model._drop_last_layer()
-
-        loaded_model.eval()

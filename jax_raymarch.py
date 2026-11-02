@@ -19,7 +19,7 @@ from scipy.spatial import KDTree
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 def load_model(path) -> FundamentalFormPredictorWithUncertainty:
-    model = FundamentalFormPredictorWithUncertainty(128, 0, 6, 8, 512, 0, rngs=nnx.Rngs(0))
+    model = FundamentalFormPredictorWithUncertainty(128, 0, 6, 8, 256, 0, rngs=nnx.Rngs(0))
     graphdef, abstract_state = nnx.split(model)
     checkpointer = ocp.StandardCheckpointer()
     state_restored = checkpointer.restore(path, abstract_state)
@@ -65,7 +65,7 @@ def raymarch_jax(points: jnp.ndarray,
                               np.arange(-200, 200), indexing='ij'),
                             axis=-1).reshape((-1, 2)).astype(jnp.float32)
     xy /= 200
-    xyz = np.stack((xy[:, 1], xy[::-1, 0], 2*np.ones((400**2,))), axis=-1)
+    xyz = np.stack((xy[:, 1], xy[::-1, 0], 0.7*np.ones((400**2,))), axis=-1)
     rd = xyz - ro
     rd /= np.linalg.norm(rd, axis=-1, keepdims=True)
     #rd = -rd
@@ -82,7 +82,7 @@ def raymarch_jax(points: jnp.ndarray,
             n_chunks=16
         )
         #print(f"d min max {d.min()} {d.max()}")
-        t += np.clip(d[0, :, np.newaxis], -1, 1)
+        t += np.clip(d[0, :, np.newaxis], 0, 1)
 
     hit = np.logical_and(d[0, :, jnp.newaxis] < 1e-3, t < 1e2)
 
@@ -97,7 +97,7 @@ def raymarch_jax(points: jnp.ndarray,
     normals = grads / (1e-10 + jnp.linalg.norm(grads, axis=-1, keepdims=True))
     brightness = jnp.maximum(0.3, normals[..., 0])
     print(normalized_uncertainties.shape, normals.shape, brightness.shape)
-    img = hsv_to_rgb(jnp.stack((normalized_uncertainties[0], jnp.ones_like(brightness[0]), brightness[0]), axis=-1))
+    img = hsv_to_rgb(jnp.stack((0.7 - 0.7*normalized_uncertainties[0], jnp.ones_like(brightness[0]), brightness[0]), axis=-1))
     img = jnp.where(hit, img, jnp.zeros_like(img))
     return img.reshape((400, 400, 3))
 
@@ -144,7 +144,7 @@ def cross_section_occupancy(points: jnp.ndarray,
 
 if __name__ == "__main__":
     print("Loading model . . .")
-    model = load_model(os.path.abspath("models/gungnir/UncertaintyTrial1/UncertaintyTrial1_phase3"))
+    model = load_model(os.path.abspath("/media/ncs-tmp/Eben/torus-project/checkpoints/sleipner/UncertaintyTrial2/UncertaintyTrial2_phase3"))
 
     print("Loading point cloud . . .")
     points, normals, neighbors = load_snail()
@@ -194,4 +194,4 @@ if __name__ == "__main__":
     ax = fig.add_subplot()
     img = ax.imshow(img)
     fig.colorbar(img, ax=ax)
-    plt.savefig("gungnir_raymarch4.png")
+    plt.savefig("snail_raymarch1.png")
