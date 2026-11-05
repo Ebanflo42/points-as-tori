@@ -90,7 +90,7 @@ def SDF_loss_with_uncertainty(
 
     uncertainty_loss = 0.5*jnp.mean(uncertainty_safe**2 - 2*jnp.log(uncertainty_safe))
 
-    loss = distance_loss + eikonality_loss + 0.1*uncertainty_loss
+    loss = distance_loss + eikonality_loss + uncertainty_loss
 
     loss_dict = {
         'distance_loss': distance_loss,
@@ -168,11 +168,11 @@ def FundamentalFormPredictorTrainer(
     mlp_dim=256,
     dropout_rate=0.0,
     rngs=None,
-    learning_rate=1e-3,
+    learning_rate=1e-4,
     weight_decay=0.0,
     warmup_steps=1000,
     total_steps=100000,
-    lr_decay=0.5,
+    lr_decay=0.8,
     decay_every=6000,
     seed=44,
 ):
@@ -307,7 +307,7 @@ def TrainFundamentalFormPredictor(
     # Architecture
     embed_dim = 128
     n_freq = 0
-    n_layers = 6
+    n_layers = 8
     n_heads = 8
     mlp_dim = embed_dim * 4
 
@@ -714,7 +714,7 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "UncertaintyTrial1"
+    model_name = "BigTrial1"
 
     # Phase 0: nicely sampled blobs
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
@@ -724,7 +724,7 @@ def train():
         num_epochs=18,
         learning_rate=1e-3,
         warmup_steps=1e3,
-        batch_size=40,
+        batch_size=20,
         n_epochs_to_save=10,
         n_shapes_to_save=10,
         #load_model_path='models/FundamentalFormPredictor_pretrained.pkl',
@@ -742,7 +742,7 @@ def train():
         num_epochs=14,
         learning_rate=1e-3,
         warmup_steps=1e3,
-        batch_size=40,
+        batch_size=20,
         n_epochs_to_save=8,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase0',
@@ -760,7 +760,7 @@ def train():
         num_epochs=10,
         learning_rate=1e-3,
         warmup_steps=1e3,
-        batch_size=40,
+        batch_size=20,
         n_epochs_to_save=6,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase1',
@@ -777,13 +777,14 @@ def train():
         num_epochs=6,
         learning_rate=1e-3,
         warmup_steps=1e3,
-        batch_size=40,
+        batch_size=20,
         n_epochs_to_save=4,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase2',
         final_save_filepath=f'{model_name}_phase3',
     )
 
+    """
     # Phase 4: everything from before, plus unevenly sampled data possibly with small gaps from a simulated scanning process
     blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
     ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
@@ -796,12 +797,13 @@ def train():
         num_epochs=2,
         learning_rate=1e-3,
         warmup_steps=1e3,
-        batch_size=40,
+        batch_size=20,
         n_epochs_to_save=2,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase3',
         final_save_filepath=f'{model_name}_phase4',
     )
+    """
 
 
 if __name__ == '__main__':

@@ -151,18 +151,6 @@ def cross_section_occupancy(points: jnp.ndarray,
     return d.reshape((400, 400))
 
 
-def set_size(w,h, ax=None):
-    """ w, h: width, height in inches """
-    if not ax: ax=plt.gca()
-    l = ax.figure.subplotpars.left
-    r = ax.figure.subplotpars.right
-    t = ax.figure.subplotpars.top
-    b = ax.figure.subplotpars.bottom
-    figw = float(w)/(r-l)
-    figh = float(h)/(t-b)
-    ax.figure.set_size_inches(figw, figh)
-
-
 if __name__ == "__main__":
     print("Loading model . . .")
     model = load_model(os.path.abspath("/media/ncs-tmp/Eben/torus-project/checkpoints/sleipner/UncertaintyTrial2/UncertaintyTrial2_phase3"))
