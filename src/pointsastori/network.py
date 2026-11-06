@@ -230,19 +230,20 @@ def _compute_weights_and_grads_from_distances_sharded(
 
     # maximum distance of the closest 64 points
     # (device, batch, n_queries, 1)
-    max_distances = knn_dists[..., 1, :]
+    max_distances = knn_dists[..., -1, :]
     min_distances = knn_dists[..., 0, :]
+    second_distances = knn_dists[..., 1, :]
     # masks all points which are not in the top 64
     # (device, batch, n_queries, max_points)
     closest_points_mask = (distances <= max_distances[..., jnp.newaxis]).astype(jnp.float32)
     # exponential coefficients decrease with the distance of the furthest point
     # (device, batch, n_queries, 1)
-    lambdas = 0.5/jnp.maximum(NAN_EPSILON, max_distances)
+    lambdas = 50.0*second_distances/jnp.maximum(NAN_EPSILON, min_distances)
 
     # compute the gradient of lambdas
-    max_dist_rhat = jnp.take_along_axis(rHat, indices[..., 1, jnp.newaxis], axis=-2)[..., 0, :]
+    second_dist_rhat = jnp.take_along_axis(rHat, indices[..., 1, jnp.newaxis], axis=-2)[..., 0, :]
     min_dist_rhat = jnp.take_along_axis(rHat, indices[..., 0, jnp.newaxis], axis=-2)[..., 0, :]
-    grad_lambdas = -0.5*max_dist_rhat/jnp.maximum(NAN_EPSILON, max_distances**2)
+    grad_lambdas = 50.0*second_dist_rhat/jnp.maximum(NAN_EPSILON, min_distances) - 50.0*min_dist_rhat*second_distances/jnp.maximum(NAN_EPSILON, min_distances**2)
 
     #logits = -lambdas[..., jnp.newaxis]*distances
     #max_logits = -jnp.min(-closest_points_mask*logits, axis=-1, keepdims=True)

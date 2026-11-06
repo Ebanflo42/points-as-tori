@@ -48,7 +48,7 @@ def torus_marching_cubes(points: jnp.ndarray,
         minor_radii,
         neighborhood_radii,
         uncertainties,
-        n_chunks=4
+        n_chunks=16
     )
 
     d = d.reshape((64, 64, 64))
@@ -59,8 +59,9 @@ def torus_marching_cubes(points: jnp.ndarray,
     # for some reason, x and y coordinates of the vertices get permuted at some point, so fix that
     verts = np.stack((verts[:, 1], verts[:, 0], verts[:, 2]), axis=-1)
     print(f"VERTS MIN MAX X Y Z {verts[:, 0].min()} {verts[:, 0].max()} {verts[:, 1].min()} {verts[:, 1].max()} {verts[:, 2].min()} {verts[:, 2].max()}")
+    print(verts.shape)
 
-    _, _, uncertainties = torus_distance_gradient_masked_with_clamp(
+    _, _, uncertainties = torus_distance_gradient_masked_with_clamp_chunked(
         jnp.ones(points.shape[:2], dtype=jnp.bool),
         verts[np.newaxis],
         points,
@@ -69,10 +70,11 @@ def torus_marching_cubes(points: jnp.ndarray,
         major_radii,
         minor_radii,
         neighborhood_radii,
-        uncertainties
+        uncertainties,
+        n_chunks=1
     )
 
-    uncertainties = np.array(uncertainties.block_until_ready())[0]
+    uncertainties = uncertainties[0]
     uncertainties = (uncertainties - uncertainties.min())/(uncertainties.max() - uncertainties.min())
     hue = 0.7 - 0.7*uncertainties
     colors = hsv_to_rgb(jnp.stack((
@@ -123,9 +125,12 @@ if __name__ == "__main__":
     model = load_model(os.path.abspath("/media/ncs-tmp/Eben/torus-project/checkpoints/sleipner/UncertaintyTrial2/UncertaintyTrial2_phase3"))
 
     print("Loading point cloud . . .")
-    #points, normals, neighbors = load_block()
+    points, normals, neighbors = load_block()
     #points, normals, neighbors = load_snail()
-    points, normals, neighbors = load_femur()
+    #points, normals, neighbors = load_femur()
+    #points, normals, neighbors = load_knot()
+    #points, normals, neighbors = load_tooth()
+    #points, normals, neighbors = load_bunny()
     print(f"x y z min max {points[:, 0].min()} {points[:, 0].max()} {points[:, 1].min()} {points[:, 1].max()} {points[:, 2].min()} {points[:, 2].max()}")
     n_points = len(points)
     mask = jnp.ones((1, n_points), dtype=jnp.bool)
@@ -152,7 +157,6 @@ if __name__ == "__main__":
     )
     print(axes.shape)
 
-    """
     block_verts, block_faces, block_colors = torus_marching_cubes(
         points[np.newaxis],
         centers,
@@ -163,8 +167,7 @@ if __name__ == "__main__":
         uncertainties
     )
 
-    render_to_html(block_verts, block_faces, block_colors, "block_vis.html")
-    """
+    render_to_html(block_verts, block_faces, block_colors, "better_blend_block_vis.html")
     """
     snail_verts, snail_faces, snail_colors = torus_marching_cubes(
         points[np.newaxis],
@@ -178,6 +181,7 @@ if __name__ == "__main__":
 
     render_to_html(snail_verts, snail_faces, snail_colors, "snail_vis.html")
     """
+    """
     femur_verts, femur_faces, femur_colors = torus_marching_cubes(
         points[np.newaxis],
         centers,
@@ -189,3 +193,43 @@ if __name__ == "__main__":
     )
 
     render_to_html(femur_verts, femur_faces, femur_colors, "femur_vis.html")
+    """
+    """
+    knot_verts, knot_faces, knot_colors = torus_marching_cubes(
+        points[np.newaxis],
+        centers,
+        axes,
+        major_radii,
+        minor_radii,
+        neighborhood_radii,
+        uncertainties
+    )
+
+    render_to_html(knot_verts, knot_faces, knot_colors, "knot_vis.html")
+    """
+    """
+    tooth_verts, tooth_faces, tooth_colors = torus_marching_cubes(
+        points[np.newaxis],
+        centers,
+        axes,
+        major_radii,
+        minor_radii,
+        neighborhood_radii,
+        uncertainties
+    )
+
+    render_to_html(tooth_verts, tooth_faces, tooth_colors, "tooth_vis.html")
+    """
+    """
+    bunny_verts, bunny_faces, bunny_colors = torus_marching_cubes(
+        points[np.newaxis],
+        centers,
+        axes,
+        major_radii,
+        minor_radii,
+        neighborhood_radii,
+        uncertainties
+    )
+    """
+
+    render_to_html(block_verts, block_faces, block_colors, "block_vis.html")

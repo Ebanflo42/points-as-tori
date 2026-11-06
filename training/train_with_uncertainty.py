@@ -172,7 +172,7 @@ def FundamentalFormPredictorTrainer(
     weight_decay=0.0,
     warmup_steps=1000,
     total_steps=100000,
-    lr_decay=0.8,
+    lr_decay=0.9,
     decay_every=6000,
     seed=44,
 ):
@@ -309,10 +309,10 @@ def TrainFundamentalFormPredictor(
     n_freq = 0
     n_layers = 8
     n_heads = 8
-    mlp_dim = embed_dim * 4
+    mlp_dim = embed_dim * 2
 
     # Sampling
-    n_queries_per_neighborhood = 120
+    n_queries_per_neighborhood = 24
     assert n_queries_per_neighborhood % batch_size == 0
     n_batches_common = n_queries_per_neighborhood // batch_size
     narrow_band_offset = 0.2
@@ -714,17 +714,17 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "BigTrial1"
+    model_name = "Better_Blending_Narrow_Trial1"
 
     # Phase 0: nicely sampled blobs
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=18,
+        num_epochs=90,
         learning_rate=1e-3,
         warmup_steps=1e3,
-        batch_size=20,
+        batch_size=24,
         n_epochs_to_save=10,
         n_shapes_to_save=10,
         #load_model_path='models/FundamentalFormPredictor_pretrained.pkl',
@@ -739,10 +739,10 @@ def train():
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=14,
-        learning_rate=1e-3,
+        num_epochs=70,
+        learning_rate=1e-4,
         warmup_steps=1e3,
-        batch_size=20,
+        batch_size=24,
         n_epochs_to_save=8,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase0',
@@ -757,10 +757,10 @@ def train():
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=10,
-        learning_rate=1e-3,
+        num_epochs=50,
+        learning_rate=1e-4,
         warmup_steps=1e3,
-        batch_size=20,
+        batch_size=24,
         n_epochs_to_save=6,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase1',
@@ -774,10 +774,10 @@ def train():
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=6,
-        learning_rate=1e-3,
+        num_epochs=30,
+        learning_rate=1e-4,
         warmup_steps=1e3,
-        batch_size=20,
+        batch_size=24,
         n_epochs_to_save=4,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase2',
@@ -797,7 +797,7 @@ def train():
         num_epochs=2,
         learning_rate=1e-3,
         warmup_steps=1e3,
-        batch_size=20,
+        batch_size=24,
         n_epochs_to_save=2,
         n_shapes_to_save=100,
         load_model_path=f'{model_name}_phase3',

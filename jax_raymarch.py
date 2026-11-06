@@ -47,6 +47,23 @@ def load_femur() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     neighbors = get_neighbors(mesh.vertices, 64)
     return 0.05*mesh.vertices, mesh.vertex_normals, neighbors
 
+def load_knot() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    mesh = TriangleMesh.read_OBJ("data/knot.obj")
+    neighbors = get_neighbors(mesh.vertices, 64)
+    return mesh.vertices, mesh.vertex_normals, neighbors
+
+
+def load_tooth() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    pointcloud = PointCloud3D.read_PLY("data/tooth.ply")
+    neighbors = get_neighbors(pointcloud.points, 64)
+    return pointcloud.points, pointcloud.normals, neighbors
+
+
+def load_bunny() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    pointcloud = PointCloud3D.read_PLY("data/holey-bunny.ply")
+    neighbors = get_neighbors(pointcloud.points, 64)
+    return pointcloud.points, pointcloud.normals, neighbors
+
 
 def hsv_to_rgb(hsv):
     h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
