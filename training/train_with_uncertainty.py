@@ -90,7 +90,7 @@ def SDF_loss_with_uncertainty(
 
     uncertainty_loss = 0.5*jnp.mean(uncertainty_safe**2 - 2*jnp.log(uncertainty_safe))
 
-    loss = distance_loss + eikonality_loss + uncertainty_loss
+    loss = distance_loss + eikonality_loss + 0.2*uncertainty_loss
 
     loss_dict = {
         'distance_loss': distance_loss,
@@ -169,7 +169,7 @@ def FundamentalFormPredictorTrainer(
     dropout_rate=0.0,
     rngs=None,
     learning_rate=1e-4,
-    weight_decay=0.0,
+    weight_decay=1e-3,
     warmup_steps=1000,
     total_steps=100000,
     lr_decay=0.9,
@@ -189,13 +189,13 @@ def FundamentalFormPredictorTrainer(
         rngs=rngs,
     )
 
-    #schedule = optax.warmup_cosine_decay_schedule(
-    #    init_value=learning_rate * 0.001,
-    #    peak_value=learning_rate,
-    #    warmup_steps=warmup_steps,
-    #    decay_steps=total_steps,
-    #    end_value=learning_rate * 0.01,
-    #)
+    schedule = optax.warmup_cosine_decay_schedule(
+        init_value=learning_rate * 0.001,
+        peak_value=learning_rate,
+        warmup_steps=warmup_steps,
+        decay_steps=total_steps,
+        end_value=learning_rate * 0.001,
+    )
     schedule = optax.exponential_decay(
         learning_rate,
         lr_decay,
@@ -203,16 +203,16 @@ def FundamentalFormPredictorTrainer(
         end_value=1e-8
     )
 
-    #optimizer = nnx.Optimizer(
-    #    model,
-    #    optax.chain(optax.adamw(learning_rate=schedule, weight_decay=weight_decay)),
-    #    wrt=nnx.Param,
-    #)
     optimizer = nnx.Optimizer(
         model,
-        optax.chain(optax.novograd(learning_rate=schedule, weight_decay=weight_decay)),
-        wrt=nnx.Param
+        optax.chain(optax.adamw(learning_rate=schedule, weight_decay=weight_decay)),
+        wrt=nnx.Param,
     )
+    #optimizer = nnx.Optimizer(
+    #    model,
+    #    optax.chain(optax.novograd(learning_rate=schedule, weight_decay=weight_decay)),
+    #    wrt=nnx.Param
+    #)
 
     @nnx.jit
     def train_step(
@@ -714,7 +714,7 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "Better_Blending_Narrow_Trial1"
+    model_name = "Adamw_Better_Blending_Narrow_Trial1"
 
     # Phase 0: nicely sampled blobs
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
@@ -726,7 +726,7 @@ def train():
         warmup_steps=1e3,
         batch_size=24,
         n_epochs_to_save=10,
-        n_shapes_to_save=10,
+        n_shapes_to_save=500,
         #load_model_path='models/FundamentalFormPredictor_pretrained.pkl',
         final_save_filepath=f'{model_name}_phase0',
     )
@@ -744,7 +744,7 @@ def train():
         warmup_steps=1e3,
         batch_size=24,
         n_epochs_to_save=8,
-        n_shapes_to_save=100,
+        n_shapes_to_save=500,
         load_model_path=f'{model_name}_phase0',
         final_save_filepath=f'{model_name}_phase1'
     )
@@ -762,7 +762,7 @@ def train():
         warmup_steps=1e3,
         batch_size=24,
         n_epochs_to_save=6,
-        n_shapes_to_save=100,
+        n_shapes_to_save=500,
         load_model_path=f'{model_name}_phase1',
         final_save_filepath=f'{model_name}_phase2',
     )
@@ -775,16 +775,15 @@ def train():
         model_name,
         training_data_filenames,
         num_epochs=30,
-        learning_rate=1e-4,
+        learning_rate=1e-5,
         warmup_steps=1e3,
         batch_size=24,
         n_epochs_to_save=4,
-        n_shapes_to_save=100,
+        n_shapes_to_save=500,
         load_model_path=f'{model_name}_phase2',
         final_save_filepath=f'{model_name}_phase3',
     )
 
-    """
     # Phase 4: everything from before, plus unevenly sampled data possibly with small gaps from a simulated scanning process
     blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
     ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
@@ -795,15 +794,14 @@ def train():
         model_name,
         training_data_filenames,
         num_epochs=2,
-        learning_rate=1e-3,
+        learning_rate=1e-6,
         warmup_steps=1e3,
         batch_size=24,
         n_epochs_to_save=2,
-        n_shapes_to_save=100,
+        n_shapes_to_save=500,
         load_model_path=f'{model_name}_phase3',
         final_save_filepath=f'{model_name}_phase4',
     )
-    """
 
 
 if __name__ == '__main__':
