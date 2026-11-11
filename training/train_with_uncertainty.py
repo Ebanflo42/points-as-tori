@@ -107,7 +107,6 @@ def validation_loss(
     coefficients, uncertainties, queries, true_distances,
     neighborhood_radii
 ):
-    #print(f"QUERIES SHAPE {queries.shape}")
     uncertainties_pos = nnx.softplus(uncertainties)
 
     centers, axes, major_radii, minor_radii = torus_precompute_masked_sharded(
@@ -203,16 +202,21 @@ def FundamentalFormPredictorTrainer(
         end_value=1e-8
     )
 
-    #optimizer = nnx.Optimizer(
-    #    model,
-    #    optax.chain(optax.adamw(learning_rate=schedule, weight_decay=weight_decay)),
-    #    wrt=nnx.Param,
-    #)
     optimizer = nnx.Optimizer(
         model,
-        optax.chain(optax.novograd(learning_rate=schedule)),
-        wrt=nnx.Param
+        optax.chain(optax.adamw(learning_rate=schedule, weight_decay=weight_decay)),
+        wrt=nnx.Param,
     )
+    #optimizer = nnx.Optimizer(
+    #    model,
+    #    optax.chain(optax.novograd(learning_rate=schedule)),
+    #    wrt=nnx.Param
+    #)
+    #optimizer = nnx.Optimizer(
+    #    model,
+    #    optax.chain(optax.sgd(learning_rate=schedule, momentum=1e-3)),
+    #    wrt=nnx.Param
+    #)
 
     @nnx.jit
     def train_step(
@@ -250,7 +254,6 @@ def FundamentalFormPredictorTrainer(
             uncertainty = model_out[..., -1]
             coeffs = model_out[..., :-1]
 
-            print(f"ALL SHAPES TO SDF LOSS {mask.shape} {positions.shape} {normals.shape} {coeffs.shape} {uncertainty.shape} {queries.shape} {true_distances.shape} {neighborhood_radii.shape}")
             loss, loss_dict = SDF_loss_with_uncertainty(
                 mask, positions, normals, coeffs, uncertainty, queries, true_distances, neighborhood_radii
             )
@@ -606,6 +609,7 @@ def TrainFundamentalFormPredictor(
 
             # ---- Validation (kept single-device for simplicity) ----
             if val_positions is not None:
+            #if False:
                 model.eval()
                 n_val_shapes = len(val_positions)
                 val_shape_losses = []
@@ -632,7 +636,6 @@ def TrainFundamentalFormPredictor(
                         val_pos, val_neigh, val_verts, val_faces, val_fmask,
                         val_key, n_queries=n_queries_per_neighborhood,
                     )
-                    print(f"QUERIES DISTANCES SHAPE {val_queries.shape} {val_distances.shape}")
                     val_output = model(val_pos[val_neigh][jnp.newaxis], val_norm[val_neigh][jnp.newaxis])
                     val_coeffs = val_output[..., :-1]
                     val_uncertainty = val_output[..., -1]
@@ -718,21 +721,21 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "Better_Blending_Wide_Trial2"
+    model_name = "Uniform_Query_sampling_trial1"
 
     # Pretraining: learn to fit tori
     training_data_filenames = ["datasets/tori_meshes.npz"]
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=10,
+        num_epochs=100,
         learning_rate=1e-3,
         batch_size=24,
         warmup_steps=1e3,
         n_epochs_to_save=10,
-        n_shapes_to_save=500,
-        lr_decay=0.5,
-        decay_every=5,
+        n_shapes_to_save=10,
+        lr_decay=0.9,
+        decay_every=10,
         final_save_filepath=f'{model_name}_pretraining',
     )
 

@@ -638,6 +638,7 @@ def generate_shape_features(
         distances: (n_points, n_queries) ground-truth signed distances
     """
     n_points = positions.shape[0]
+    """
     n_queries_per_type = n_queries // 3
 
     # Pre-compute face properties (once for entire shape)
@@ -670,6 +671,8 @@ def generate_shape_features(
         )
 
     queries = jax.vmap(gen_queries_for_point)(jnp.arange(n_points))  # (n_points, n_queries, 3)
+    """
+    queries = jax.random.uniform(key, (n_points, n_queries, 3), dtype=jnp.float32, minval=-1, maxval=1)
 
     # Compute signed distances for all queries
     def compute_distances_for_point(point_queries):
@@ -679,8 +682,8 @@ def generate_shape_features(
 
     distances = jax.vmap(compute_distances_for_point)(queries)  # (n_points, n_queries)
 
-    perm = jax.random.permutation(shuffle_key, queries.shape[1])
-    queries = jnp.take(queries, perm, axis=1)
-    distances = jnp.take(distances, perm, axis=1)
+    #perm = jax.random.permutation(shuffle_key, queries.shape[1])
+    #queries = jnp.take(queries, perm, axis=1)
+    #distances = jnp.take(distances, perm, axis=1)
 
     return queries, distances
