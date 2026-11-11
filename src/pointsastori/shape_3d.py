@@ -1187,7 +1187,6 @@ class SDF3D:
 def get_neighbors(points: np.ndarray, k_neighbors: int, outliers: np.ndarray = np.array([])):
     """Return a (|P|, k) array of k-nearest neighbor indices."""
     points_for_c = np.asfortranarray(points.T)
-    print(points_for_c.shape, points_for_c.dtype)
     neighbors = utilsb.get_neighbors(points_for_c, k_neighbors, outliers)
     return neighbors.T
 

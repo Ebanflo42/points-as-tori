@@ -1002,8 +1002,9 @@ def generate_torus_meshes():
     all_neighbors = [get_neighbors(p, 64) for p in all_positions]
     all_neighbors = np.asarray(all_neighbors)
 
-    all_masks = np.ones((len(all_positions),), dtype=np.bool)
-    all_face_masks = np.ones((len(all_mesh_faces),), dtype=np.bool)
+    all_masks = np.ones((all_positions.shape[0], all_positions.shape[1]), dtype=np.bool)
+    all_face_masks = np.ones((all_mesh_faces.shape[0], all_mesh_faces.shape[1]), dtype=np.bool)
+    print(f"mask shapes: {all_masks.shape} {all_face_masks.shape}")
 
     return all_positions, all_normals, all_neighbors, all_mesh_faces, all_masks, all_face_masks
 

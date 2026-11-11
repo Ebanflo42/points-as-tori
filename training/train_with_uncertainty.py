@@ -196,12 +196,12 @@ def FundamentalFormPredictorTrainer(
     #    decay_steps=total_steps,
     #    end_value=learning_rate * 0.001,
     #)
-    #schedule = optax.exponential_decay(
-    #    learning_rate,
-    #    lr_decay,
-    #    decay_every,
-    #    end_value=1e-8
-    #)
+    schedule = optax.exponential_decay(
+        learning_rate,
+        lr_decay,
+        decay_every,
+        end_value=1e-8
+    )
 
     #optimizer = nnx.Optimizer(
     #    model,
@@ -210,7 +210,7 @@ def FundamentalFormPredictorTrainer(
     #)
     optimizer = nnx.Optimizer(
         model,
-        optax.chain(optax.novograd(learning_rate=learning_rate)),
+        optax.chain(optax.novograd(learning_rate=schedule)),
         wrt=nnx.Param
     )
 
@@ -288,6 +288,8 @@ def TrainFundamentalFormPredictor(
     warmup_steps,
     n_epochs_to_save,
     n_shapes_to_save,
+    lr_decay=0.9,
+    decay_every=6000,
     load_model_path=None,
     final_save_filepath=None,
 ):
@@ -367,6 +369,8 @@ def TrainFundamentalFormPredictor(
         weight_decay=weight_decay,
         warmup_steps=warmup_steps,
         total_steps=total_steps,
+        lr_decay=lr_decay,
+        decay_every=decay_every,
         seed=seed,
     )
 
@@ -714,10 +718,26 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "Better_Blending_Wide_Trial1"
+    model_name = "Better_Blending_Wide_Trial2"
+
+    # Pretraining: learn to fit tori
+    training_data_filenames = ["datasets/tori_meshes.npz"]
+    TrainFundamentalFormPredictor(
+        model_name,
+        training_data_filenames,
+        num_epochs=10,
+        learning_rate=1e-3,
+        batch_size=24,
+        warmup_steps=1e3,
+        n_epochs_to_save=10,
+        n_shapes_to_save=500,
+        lr_decay=0.5,
+        decay_every=5,
+        final_save_filepath=f'{model_name}_pretraining',
+    )
+
 
     # Phase 0: nicely sampled blobs
-    """
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
     TrainFundamentalFormPredictor(
         model_name,
@@ -728,7 +748,7 @@ def train():
         batch_size=24,
         n_epochs_to_save=10,
         n_shapes_to_save=500,
-        #load_model_path='models/FundamentalFormPredictor_pretrained.pkl',
+        load_model_path=f'{model_name}_pretraining',
         final_save_filepath=f'{model_name}_phase0',
     )
 
@@ -749,7 +769,6 @@ def train():
         load_model_path=f'{model_name}_phase0',
         final_save_filepath=f'{model_name}_phase1'
     )
-    """
 
     # Phase 2: nicely sampled blobs and more ABC meshes
     blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
