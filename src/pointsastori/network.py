@@ -871,6 +871,88 @@ def generate_torus_mesh(center: np.ndarray, axis: np.ndarray, major_radius: floa
     return vertices, faces
 
 
+
+def generate_torus_trimesh(
+    center: np.ndarray,
+    axis: np.ndarray,
+    major_radius: float,
+    minor_radius: float,
+    major_res: int,
+    minor_res: int
+):
+    """
+    Generate tri mesh for a single torus.
+
+    Args:
+        center: (3,) center position
+        axis: (2,) axis in spherical coordinates (theta, phi)
+        major_radius: major radius R
+        minor_radius: minor radius r (can be negative)
+
+    Returns:
+        vertices: (major_res * minor_res, 3)
+        faces: (major_res * minor_res, 3) tri indices
+    """
+
+    # Get torus axis as 3D vector
+    axis_3d = rotation_to_cartesian_jax(axis)
+
+    # Create two orthogonal vectors perpendicular to axis
+    v1, v2 = orthonormal_basis_with_rotation(axis_3d, 0.0)
+
+    # Generate vertices
+    vertices = []
+    normals = []
+
+    for i in range(major_res):
+        # Angle around major circle
+        theta = 2 * np.pi * i / major_res
+
+        # Point on major circle
+        major_circle_point = center + major_radius * (np.cos(theta) * v1 + np.sin(theta) * v2)
+
+        # Normal direction at this point on major circle (pointing away from center)
+        major_normal = np.cos(theta) * v1 + np.sin(theta) * v2
+
+        # Create local frame for minor circle
+        # tangent to major circle
+        major_tangent = -np.sin(theta) * v1 + np.cos(theta) * v2
+
+        for j in range(minor_res):
+            # Angle around minor circle
+            phi = 2 * np.pi * j / minor_res
+
+            # Offset from major circle
+            # Note: minor_radius can be negative (changes which side of major circle)
+            offset = minor_radius * (np.cos(phi) * major_normal + np.sin(phi) * axis_3d)
+
+            vertex = major_circle_point + offset
+            vertices.append(vertex)
+
+            normal = offset/np.linalg.norm(offset)
+            normals.append(normal)
+
+    vertices = np.array(vertices)
+    normals = np.array(normals)
+
+    # Generate quad faces
+    faces = []
+
+    for i in range(major_res):
+        for j in range(minor_res):
+            v0 = i * minor_res + j
+            v1 = ((i + 1) % major_res) * minor_res + j
+            v2 = ((i + 1) % major_res) * minor_res + (j + 1) % minor_res
+            v3 = i * minor_res + (j + 1) % minor_res
+
+            faces.append([v1, v2, v3])
+            faces.append([v3, v0, v1])
+
+    faces = np.array(faces, dtype=np.int32)
+
+    return vertices, faces, normals
+
+
 def export_torus(center: np.ndarray, axis: np.ndarray, major_radius: float, minor_radius: float, save_filepath: str):
     """
     Export a single torus.

@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import orbax.checkpoint as ocp
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from time import time
 import jax.numpy as jnp
 
 from matplotlib.colors import ListedColormap
@@ -122,15 +123,12 @@ def render_to_html(verts, faces, colors, fname):
 
 if __name__ == "__main__":
     print("Loading model . . .")
-    model = load_model(os.path.abspath("/media/ncs-tmp/Eben/torus-project/checkpoints/sleipner/UncertaintyTrial2/UncertaintyTrial2_phase3"))
+    model = load_model(os.path.abspath(
+        "/home/kadile/Projects/points-as-tori/models/Better_Blending_Wide_Trial1/Better_Blending_Wide_Trial1_phase2"
+    ))
 
     print("Loading point cloud . . .")
     points, normals, neighbors = load_block()
-    #points, normals, neighbors = load_snail()
-    #points, normals, neighbors = load_femur()
-    #points, normals, neighbors = load_knot()
-    #points, normals, neighbors = load_tooth()
-    #points, normals, neighbors = load_bunny()
     print(f"x y z min max {points[:, 0].min()} {points[:, 0].max()} {points[:, 1].min()} {points[:, 1].max()} {points[:, 2].min()} {points[:, 2].max()}")
     n_points = len(points)
     mask = jnp.ones((1, n_points), dtype=jnp.bool)
@@ -148,9 +146,11 @@ if __name__ == "__main__":
 
     print("Evaluating tori . . .")
     model_out = model(jax_points[jnp.newaxis], jax_normals[jnp.newaxis])
-    print(model_out.shape)
+    t0 = time()
+    model_out = model(jax_points[jnp.newaxis], jax_normals[jnp.newaxis])
+    t1 = time()
+    print(f"Time for pre-computing {n_points} neighborhoods: {t1 - t0}")
     coefficients = model_out[..., :-1]
-    print(coefficients.shape)
     uncertainties = model_out[..., -1]
     centers, axes, major_radii, minor_radii = torus_precompute_masked_sharded(
         mask, points[np.newaxis], normals[np.newaxis], coefficients
@@ -167,7 +167,7 @@ if __name__ == "__main__":
         uncertainties
     )
 
-    render_to_html(block_verts, block_faces, block_colors, "better_blend_block_vis.html")
+    render_to_html(block_verts, block_faces, block_colors, "wide_block_vis.html")
     """
     snail_verts, snail_faces, snail_colors = torus_marching_cubes(
         points[np.newaxis],
@@ -230,6 +230,5 @@ if __name__ == "__main__":
         neighborhood_radii,
         uncertainties
     )
-    """
-
     render_to_html(block_verts, block_faces, block_colors, "block_vis.html")
+    """

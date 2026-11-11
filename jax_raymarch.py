@@ -22,7 +22,7 @@ from scipy.spatial import KDTree
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 def load_model(path) -> FundamentalFormPredictorWithUncertainty:
-    model = FundamentalFormPredictorWithUncertainty(128, 0, 6, 8, 256, 0, rngs=nnx.Rngs(0))
+    model = FundamentalFormPredictorWithUncertainty(128, 0, 8, 8, 512, 0, rngs=nnx.Rngs(0))
     graphdef, abstract_state = nnx.split(model)
     checkpointer = ocp.StandardCheckpointer()
     state_restored = checkpointer.restore(path, abstract_state)
