@@ -231,20 +231,22 @@ def _compute_weights_and_grads_from_distances_sharded(
     # (device, batch, n_queries, 1)
     max_distances = knn_dists[..., -1, :]
     min_distances = knn_dists[..., 0, :]
-    #second_distances = knn_dists[..., 1, :]
+    second_distances = knn_dists[..., 1, :]
     # masks all points which are not in the top 64
     # (device, batch, n_queries, max_points)
     closest_points_mask = (distances <= max_distances[..., jnp.newaxis]).astype(jnp.float32)
     # exponential coefficients decrease with the distance of the furthest point
     # (device, batch, n_queries, 1)
-    lambdas = 50.0*max_distances/jnp.maximum(NAN_EPSILON, min_distances)
+    lambdas = 1.0*max_distances/jnp.maximum(NAN_EPSILON, second_distances**2)
+    #lambdas = 4.0/jnp.maximum(NAN_EPSILON, max_distances)
 
     # compute the gradient of lambdas
-    #second_dist_rhat = jnp.take_along_axis(rHat, indices[..., 1, jnp.newaxis], axis=-2)[..., 0, :]
+    second_dist_rhat = jnp.take_along_axis(rHat, indices[..., 1, jnp.newaxis], axis=-2)[..., 0, :]
     min_dist_rhat = jnp.take_along_axis(rHat, indices[..., 0, jnp.newaxis], axis=-2)[..., 0, :]
     max_dist_rhat = jnp.take_along_axis(rHat, indices[..., -1, jnp.newaxis], axis=-2)[..., 0, :]
-    grad_lambdas = 50.0*(max_dist_rhat/jnp.maximum(NAN_EPSILON, min_distances) - \
-        min_dist_rhat*max_distances/jnp.maximum(NAN_EPSILON, min_distances**2))
+    grad_lambdas = 1.0*(max_dist_rhat/jnp.maximum(NAN_EPSILON, second_distances**2) - \
+        2*second_dist_rhat*max_distances/jnp.maximum(NAN_EPSILON, second_distances**3))
+    #grad_lambdas = -4.0*max_dist_rhat/jnp.maximum(NAN_EPSILON, max_distances**2)
 
     #logits = -lambdas[..., jnp.newaxis]*distances
     #max_logits = -jnp.min(-closest_points_mask*logits, axis=-1, keepdims=True)
@@ -1669,7 +1671,7 @@ class FundamentalFormPredictorWithUncertainty(nnx.Module):
                 7,
                 kernel_init=nnx.initializers.zeros_init(),
                 # bias_init=nnx.initializers.ones_init(),
-                bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 0.5])),
+                bias_init=nnx.initializers.constant(jnp.array([0.0, 0.0, 0.0, 0.0, -0.5, -0.5, 0.75])),
                 rngs=rngs,
             ),
         )

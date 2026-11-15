@@ -672,7 +672,7 @@ def generate_shape_features(
 
     queries = jax.vmap(gen_queries_for_point)(jnp.arange(n_points))  # (n_points, n_queries, 3)
     """
-    queries = jax.random.uniform(key, (n_points, n_queries, 3), dtype=jnp.float32, minval=-1, maxval=1)
+    queries = jax.random.uniform(key, (n_points, n_queries, 3), dtype=jnp.float32, minval=-1.5, maxval=1.5)
 
     # Compute signed distances for all queries
     def compute_distances_for_point(point_queries):

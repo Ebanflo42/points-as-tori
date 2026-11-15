@@ -22,7 +22,7 @@ from scipy.spatial import KDTree
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 def load_model(path) -> FundamentalFormPredictorWithUncertainty:
-    model = FundamentalFormPredictorWithUncertainty(128, 0, 8, 8, 512, 0, rngs=nnx.Rngs(0))
+    model = FundamentalFormPredictorWithUncertainty(128, 0, 6, 8, 256, 0, rngs=nnx.Rngs(0))
     graphdef, abstract_state = nnx.split(model)
     checkpointer = ocp.StandardCheckpointer()
     state_restored = checkpointer.restore(path, abstract_state)
@@ -39,18 +39,21 @@ def load_snail() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 def load_block() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     mesh = TriangleMesh.read_OBJ("data/block.obj")
     neighbors = get_neighbors(mesh.vertices, 64)
-    return 0.05*mesh.vertices, mesh.vertex_normals, neighbors
+    return 0.05*mesh.vertices, mesh.vertex_normals, neighbors, mesh.faces
 
 
 def load_femur() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     mesh = TriangleMesh.read_OBJ("data/femur.obj")
     neighbors = get_neighbors(mesh.vertices, 64)
-    return 0.05*mesh.vertices, mesh.vertex_normals, neighbors
+    verts = 0.1*mesh.vertices
+    verts *= 1.4
+    verts -= 0.41
+    return verts, mesh.vertex_normals, neighbors, mesh.faces
 
 def load_knot() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     mesh = TriangleMesh.read_OBJ("data/knot.obj")
     neighbors = get_neighbors(mesh.vertices, 64)
-    return mesh.vertices, mesh.vertex_normals, neighbors
+    return mesh.vertices, mesh.vertex_normals, neighbors, mesh.faces
 
 
 def load_tooth() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

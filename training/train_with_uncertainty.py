@@ -168,7 +168,7 @@ def FundamentalFormPredictorTrainer(
     dropout_rate=0.0,
     rngs=None,
     learning_rate=1e-4,
-    weight_decay=1e-3,
+    weight_decay=0.0,
     warmup_steps=1000,
     total_steps=100000,
     lr_decay=0.9,
@@ -188,19 +188,19 @@ def FundamentalFormPredictorTrainer(
         rngs=rngs,
     )
 
-    #schedule = optax.warmup_cosine_decay_schedule(
-    #    init_value=learning_rate * 0.001,
-    #    peak_value=learning_rate,
-    #    warmup_steps=warmup_steps,
-    #    decay_steps=total_steps,
-    #    end_value=learning_rate * 0.001,
-    #)
-    schedule = optax.exponential_decay(
-        learning_rate,
-        lr_decay,
-        decay_every,
-        end_value=1e-8
+    schedule = optax.warmup_cosine_decay_schedule(
+        init_value=learning_rate * 0.001,
+        peak_value=learning_rate,
+        warmup_steps=warmup_steps,
+        decay_steps=total_steps,
+        end_value=learning_rate * 0.001,
     )
+    #schedule = optax.exponential_decay(
+    #    learning_rate,
+    #    lr_decay,
+    #    decay_every,
+    #    end_value=1e-8
+    #)
 
     optimizer = nnx.Optimizer(
         model,
@@ -314,7 +314,7 @@ def TrainFundamentalFormPredictor(
     n_freq = 0
     n_layers = 8
     n_heads = 8
-    mlp_dim = embed_dim * 4
+    mlp_dim = embed_dim * 2
 
     # Sampling
     n_queries_per_neighborhood = 24
@@ -721,7 +721,7 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "Uniform_Query_sampling_trial1"
+    model_name = "Narrow_Uniform_Query_sampling_trial2"
 
     # Pretraining: learn to fit tori
     training_data_filenames = ["datasets/tori_meshes.npz"]
@@ -731,7 +731,7 @@ def train():
         num_epochs=100,
         learning_rate=1e-3,
         batch_size=24,
-        warmup_steps=1e3,
+        warmup_steps=10,
         n_epochs_to_save=10,
         n_shapes_to_save=10,
         lr_decay=0.9,
