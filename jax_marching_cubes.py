@@ -303,7 +303,7 @@ def torus_marching_cubes(points: jnp.ndarray,
         np.linspace(-1, 1, num=64),
     ), axis=-1).reshape((1, -1, 3)).astype(np.float32)
 
-    d, _, _ = torus_distance_gradient_masked_with_clamp_chunked(
+    d, grads, _ = torus_distance_gradient_masked_with_clamp_chunked(
         jnp.ones(points.shape[:2], dtype=jnp.bool),
         grid,
         points,
@@ -315,6 +315,10 @@ def torus_marching_cubes(points: jnp.ndarray,
         uncertainties,
         n_chunks=16
     )
+
+    norm_grads = jnp.linalg.norm(grads, axis=-1)
+    eikonality_error = jnp.mean(jnp.abs(1 - norm_grads))
+    print(f"Eikonality error: {eikonality_error}")
 
     d = d.reshape((64, 64, 64))
 

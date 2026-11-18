@@ -88,9 +88,9 @@ def SDF_loss_with_uncertainty(
         lambda: 0.0,
     )
 
-    uncertainty_loss = 0.5*jnp.mean(uncertainty_safe**2 - 2*jnp.log(uncertainty_safe))
+    uncertainty_loss = 0.5*jnp.mean(uncertainty_safe**2 - 2*jnp.log(uncertainty_safe) - 1)
 
-    loss = distance_loss + eikonality_loss + uncertainty_loss
+    loss = distance_loss + eikonality_loss + 3.0*uncertainty_loss
 
     loss_dict = {
         'distance_loss': distance_loss,
@@ -143,9 +143,9 @@ def validation_loss(
         lambda: 0.0,
     )
 
-    uncertainty_loss = 0.5*jnp.mean(uncertainty_safe - jnp.log(uncertainty_safe))
+    uncertainty_loss = 0.5*jnp.mean(uncertainty_safe - jnp.log(uncertainty_safe) - 1)
 
-    loss = distance_loss + eikonality_loss + uncertainty_loss
+    loss = distance_loss + eikonality_loss + 3.0*uncertainty_loss
 
     loss_dict = {
         'distance_loss': distance_loss,
@@ -172,7 +172,7 @@ def FundamentalFormPredictorTrainer(
     warmup_steps=1000,
     total_steps=100000,
     lr_decay=0.9,
-    decay_every=6000,
+    decay_every=3000,
     seed=44,
 ):
     if rngs is None:
@@ -189,17 +189,17 @@ def FundamentalFormPredictorTrainer(
     )
 
     schedule = optax.warmup_cosine_decay_schedule(
-        init_value=learning_rate * 0.001,
+        init_value=learning_rate * 0.0001,
         peak_value=learning_rate,
         warmup_steps=warmup_steps,
         decay_steps=total_steps,
-        end_value=learning_rate * 0.001,
+        end_value=learning_rate * 0.0001,
     )
     #schedule = optax.exponential_decay(
     #    learning_rate,
     #    lr_decay,
     #    decay_every,
-    #    end_value=1e-8
+    #    end_value=1e-10
     #)
 
     optimizer = nnx.Optimizer(
@@ -292,7 +292,7 @@ def TrainFundamentalFormPredictor(
     n_epochs_to_save,
     n_shapes_to_save,
     lr_decay=0.9,
-    decay_every=6000,
+    decay_every=3000,
     load_model_path=None,
     final_save_filepath=None,
 ):
@@ -317,7 +317,7 @@ def TrainFundamentalFormPredictor(
     mlp_dim = embed_dim * 2
 
     # Sampling
-    n_queries_per_neighborhood = 24
+    n_queries_per_neighborhood = 30
     assert n_queries_per_neighborhood % batch_size == 0
     n_batches_common = n_queries_per_neighborhood // batch_size
     narrow_band_offset = 0.2
@@ -721,18 +721,19 @@ def TrainFundamentalFormPredictor(
 
 def train():
     dataset_dir = "datasets/nice"
-    model_name = "Narrow_Uniform_Query_sampling_trial2"
+    model_name = "newest_blending_trial3"
 
     # Pretraining: learn to fit tori
+    """
     training_data_filenames = ["datasets/tori_meshes.npz"]
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
         num_epochs=100,
-        learning_rate=1e-3,
-        batch_size=24,
+        learning_rate=1e-4,
+        batch_size=30,
         warmup_steps=10,
-        n_epochs_to_save=10,
+        n_epochs_to_save=20,
         n_shapes_to_save=10,
         lr_decay=0.9,
         decay_every=10,
@@ -742,14 +743,15 @@ def train():
 
     # Phase 0: nicely sampled blobs
     training_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
+    training_data_filenames.append("datasets/tori_meshes.npz")
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=90,
-        learning_rate=1e-3,
+        num_epochs=96,
+        learning_rate=1e-5,
         warmup_steps=1e3,
-        batch_size=24,
-        n_epochs_to_save=10,
+        batch_size=30,
+        n_epochs_to_save=12,
         n_shapes_to_save=500,
         load_model_path=f'{model_name}_pretraining',
         final_save_filepath=f'{model_name}_phase0',
@@ -760,14 +762,15 @@ def train():
     ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC17_train_mode0_*.npz'))
     lists = [blob_filenames, ABC_filenames]
     training_data_filenames = [val for tup in zip(*lists) for val in tup]  # interleave lists
+    training_data_filenames.append("datasets/tori_meshes.npz")
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=70,
-        learning_rate=1e-4,
+        num_epochs=32,
+        learning_rate=1e-6,
         warmup_steps=1e3,
-        batch_size=24,
-        n_epochs_to_save=8,
+        batch_size=30,
+        n_epochs_to_save=4,
         n_shapes_to_save=500,
         load_model_path=f'{model_name}_phase0',
         final_save_filepath=f'{model_name}_phase1'
@@ -777,15 +780,15 @@ def train():
     blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
     ABC17_filenames = glob.glob(os.path.join(dataset_dir, 'ABC17_train_mode0_*.npz'))
     ABC2_filenames = glob.glob(os.path.join(dataset_dir, 'ABC2_train_mode0_*.npz'))
-    training_data_filenames = blob_filenames + ABC17_filenames + ABC2_filenames
+    training_data_filenames = blob_filenames + ABC17_filenames + ABC2_filenames + ["datasets/tori_meshes.npz"]
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=50,
-        learning_rate=1e-4,
+        num_epochs=32,
+        learning_rate=1e-6,
         warmup_steps=1e3,
-        batch_size=24,
-        n_epochs_to_save=6,
+        batch_size=30,
+        n_epochs_to_save=4,
         n_shapes_to_save=500,
         load_model_path=f'{model_name}_phase1',
         final_save_filepath=f'{model_name}_phase2',
@@ -794,35 +797,37 @@ def train():
     # Phase 3: nicely sampled blobs and even more ABC meshes
     blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
     ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
-    training_data_filenames = blob_filenames + ABC_filenames
+    training_data_filenames = blob_filenames + ABC_filenames + ["datasets/tori_meshes.npz"]
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=30,
-        learning_rate=1e-5,
+        num_epochs=20,
+        learning_rate=1e-6,
         warmup_steps=1e3,
-        batch_size=24,
+        batch_size=30,
         n_epochs_to_save=4,
         n_shapes_to_save=500,
         load_model_path=f'{model_name}_phase2',
         final_save_filepath=f'{model_name}_phase3',
     )
+    """
 
     # Phase 4: everything from before, plus unevenly sampled data possibly with small gaps from a simulated scanning process
     blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
     ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
     blob_filenames_simulated = glob.glob(os.path.join('datasets/simulated', 'blobs_train_mode*.npz'))
     ABC_filenames_simulated = glob.glob(os.path.join('datasets/simulated', 'ABC*_train_mode*.npz'))
-    training_data_filenames = blob_filenames + ABC_filenames + blob_filenames_simulated + ABC_filenames_simulated
+    training_data_filenames = blob_filenames + ABC_filenames + blob_filenames_simulated + ABC_filenames_simulated + ["datasets/tori_meshes.npz"]
     TrainFundamentalFormPredictor(
         model_name,
         training_data_filenames,
-        num_epochs=10,
-        learning_rate=1e-6,
+        num_epochs=8,
+        learning_rate=1e-7,
         warmup_steps=1e3,
-        batch_size=24,
+        batch_size=30,
         n_epochs_to_save=2,
         n_shapes_to_save=500,
+        decay_every=6000,
         load_model_path=f'{model_name}_phase3',
         final_save_filepath=f'{model_name}_phase4',
     )
