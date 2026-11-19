@@ -2,8 +2,8 @@ import matplotlib.pyplot as plt
 
 from pointsastori.shape_3d import *
 from pointsastori.network import *
-from mesh_data import *
-from mesh_sampling_jax import *
+from pointsastori.mesh_data import *
+from pointsastori.mesh_sampling_jax import *
 
 
 def load_mesh_training_data(filepath):

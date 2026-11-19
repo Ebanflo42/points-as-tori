@@ -1,0 +1,60 @@
+experiment_name: "macaroni_net1"
+seed: 0
+lambda_coefficient: 64
+uncertainty_coefficient: 0.3
+
+model_config:
+    n_layers: 8
+    n_heads: 8
+    mha_width: 128
+    mlp_width: 256
+
+pretraining_config:
+    learning_rate: 0.0001
+    warmup_steps: 10
+    num_epochs: 100
+    print_every: 10
+    save_and_validate_every: 20
+    queries_per_neighborhood: 30
+
+phase0_config:
+    learning_rate: 0.00001
+    warmup_steps: 1000
+    num_epochs: 96
+    print_every: 250
+    save_and_validate_every: 12
+    queries_per_neighborhood: 30
+
+phase1_config:
+    learning_rate: 0.000001
+    warmup_steps: 1000
+    num_epochs: 32
+    print_every: 250
+    save_and_validate_every: 4
+    queries_per_neighborhood: 30
+
+phase2_config:
+    learning_rate: 0.000001
+    warmup_steps: 1000
+    num_epochs: 32
+    print_every: 250
+    save_and_validate_every: 4
+    queries_per_neighborhood: 30
+
+phase3_config:
+    learning_rate: 0.000001
+    warmup_steps: 1000
+    num_epochs: 20
+    print_every: 250
+    save_and_validate_every: 4
+    queries_per_neighborhood: 30
+
+run_phase4: True
+
+phase4_config:
+    learning_rate: 0.0000001
+    warmup_steps: 1000
+    num_epochs: 8
+    print_every: 250
+    save_and_validate_every: 2
+    queries_per_neighborhood: 30

@@ -696,7 +696,7 @@ def generate_blob_dataset(
     print(f'  Test: {len(test_meshes)} meshes')
 
     # Save NPZ files
-    from mesh_data import save_mesh_dataset
+    from pointsastori.mesh_data import save_mesh_dataset
 
     train_path = os.path.join(save_dir, f'{name}_train_meshes.npz')
     test_path = os.path.join(save_dir, f'{name}_test_meshes.npz')

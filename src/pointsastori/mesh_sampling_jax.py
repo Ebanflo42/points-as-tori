@@ -6,8 +6,8 @@ import jax.numpy as jnp
 from jax import jit
 from functools import partial
 
-from pointsastori.shape_3d import *
-from mesh_data import *
+from .shape_3d import *
+from .mesh_data import *
 
 EPS = 1e-10
 
@@ -650,7 +650,6 @@ def generate_shape_features(
     bbox_maxs = jnp.max(neighbor_positions, axis=1)
 
     # Generate keys for each neighborhood
-    key, shuffle_key = jax.random.split(key)
     keys = jax.random.split(key, n_points)
 
     # Vectorized query generation
@@ -672,8 +671,6 @@ def generate_shape_features(
 
     queries = jax.vmap(gen_queries_for_point)(jnp.arange(n_points))  # (n_points, n_queries, 3)
 
-    #queries = jax.random.uniform(key, (n_points, n_queries, 3), dtype=jnp.float32, minval=-1.5, maxval=1.5)
-
     # Compute signed distances for all queries
     def compute_distances_for_point(point_queries):
         if use_unsigned_distance:
@@ -681,9 +678,5 @@ def generate_shape_features(
         return signed_distance_to_mesh(point_queries, vertices, faces, face_mask)
 
     distances = jax.vmap(compute_distances_for_point)(queries)  # (n_points, n_queries)
-
-    #perm = jax.random.permutation(shuffle_key, queries.shape[1])
-    #queries = jnp.take(queries, perm, axis=1)
-    #distances = jnp.take(distances, perm, axis=1)
 
     return queries, distances
