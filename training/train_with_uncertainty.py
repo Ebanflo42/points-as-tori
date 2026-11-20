@@ -567,6 +567,9 @@ if __name__ == '__main__':
     experiment_name = config_dict['experiment_name']
     experiment_dir = os.path.join('models', experiment_name)
 
+    with open(os.path.join(experiment_dir, 'config.yaml'), 'w') as f:
+        yaml.dump(config_dict, f)
+
     if os.path.exists(experiment_dir):
         print(f"WARNING: EXPERIMENT DIRECTORY {experiment_dir} ALREADY EXISTS!!! "
               "ASSUMING THIS IS INTENTIONAL AND CONTINUING!!!")
@@ -586,106 +589,111 @@ if __name__ == '__main__':
 
     # Pretraining: Fit 10 tori
     pretraining_model_dir = f'{experiment_dir}/{experiment_name}_pretraining'
-    pretraining_data_filenames = ["datasets/tori_meshes.npz"]
-    pretraining_config = TrainingConfig(
-        **config_dict['pretraining_config']
-    )
-    print(f"Pretraining config: {pretraining_config}")
-    train_fundamental_form_predictor(
-        pretraining_model_dir,
-        seed,
-        pretraining_data_filenames,
-        model_config,
-        pretraining_config,
-        lambda_coefficient,
-        uncertainty_coefficient,
-    )
+    if config_dict['run_pretraining']:
+        pretraining_data_filenames = ["datasets/tori_meshes.npz"]
+        pretraining_config = TrainingConfig(
+            **config_dict['pretraining_config']
+        )
+        print(f"Pretraining config: {pretraining_config}")
+        train_fundamental_form_predictor(
+            pretraining_model_dir,
+            seed,
+            pretraining_data_filenames,
+            model_config,
+            pretraining_config,
+            lambda_coefficient,
+            uncertainty_coefficient,
+        )
 
     # Phase 0: Nicely sampled blobs
     phase0_model_dir = f'{experiment_dir}/{experiment_name}_phase0'
-    phase0_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
-    phase0_data_filenames.append("datasets/tori_meshes.npz")
-    phase0_config = TrainingConfig(
-        **config_dict['phase0_config']
-    )
-    print(f"Phase 0 config: {phase0_config}")
-    train_fundamental_form_predictor(
-        phase0_model_dir,
-        seed,
-        phase0_data_filenames,
-        model_config,
-        phase0_config,
-        lambda_coefficient,
-        uncertainty_coefficient,
-        load_model_path=pretraining_model_dir
-    )
+    if config_dict['run_phase0']:
+        phase0_data_filenames = sorted(glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz')))
+        phase0_data_filenames.append("datasets/tori_meshes.npz")
+        phase0_config = TrainingConfig(
+            **config_dict['phase0_config']
+        )
+        print(f"Phase 0 config: {phase0_config}")
+        train_fundamental_form_predictor(
+            phase0_model_dir,
+            seed,
+            phase0_data_filenames,
+            model_config,
+            phase0_config,
+            lambda_coefficient,
+            uncertainty_coefficient,
+            load_model_path=pretraining_model_dir
+        )
 
     # Phase 1: Nicely sampled blobs and ABC meshes
     phase1_model_dir = f'{experiment_dir}/{experiment_name}_phase1'
-    blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
-    ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC17_train_mode0_*.npz'))
-    lists = [blob_filenames, ABC_filenames]
-    phase1_data_filenames = [val for tup in zip(*lists) for val in tup]  # interleave lists
-    phase1_data_filenames.append("datasets/tori_meshes.npz")
-    phase1_config = TrainingConfig(
-        **config_dict['phase1_config']
-    )
-    print(f"Phase 1 config: {phase1_config}")
-    train_fundamental_form_predictor(
-        phase1_model_dir,
-        seed,
-        phase1_data_filenames,
-        model_config,
-        phase1_config,
-        lambda_coefficient,
-        uncertainty_coefficient,
-        load_model_path=phase0_model_dir
-    )
+    if config_dict['run_phase1']:
+        blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
+        ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC17_train_mode0_*.npz'))
+        lists = [blob_filenames, ABC_filenames]
+        phase1_data_filenames = [val for tup in zip(*lists) for val in tup]  # interleave lists
+        phase1_data_filenames.append("datasets/tori_meshes.npz")
+        phase1_config = TrainingConfig(
+            **config_dict['phase1_config']
+        )
+        print(f"Phase 1 config: {phase1_config}")
+        train_fundamental_form_predictor(
+            phase1_model_dir,
+            seed,
+            phase1_data_filenames,
+            model_config,
+            phase1_config,
+            lambda_coefficient,
+            uncertainty_coefficient,
+            load_model_path=phase0_model_dir
+        )
 
     # Phase 2: nicely sampled blobs and more ABC meshes
     phase2_model_dir = f'{experiment_dir}/{experiment_name}_phase2'
-    blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
-    ABC17_filenames = glob.glob(os.path.join(dataset_dir, 'ABC17_train_mode0_*.npz'))
-    ABC2_filenames = glob.glob(os.path.join(dataset_dir, 'ABC2_train_mode0_*.npz'))
-    phase2_data_filenames = blob_filenames + ABC17_filenames + ABC2_filenames + ["datasets/tori_meshes.npz"]
-    phase2_config = TrainingConfig(
-        **config_dict['phase2_config']
-    )
-    print(f"Phase 2 config: {phase2_config}")
-    train_fundamental_form_predictor(
-        phase2_model_dir,
-        seed,
-        phase2_data_filenames,
-        model_config,
-        phase2_config,
-        lambda_coefficient,
-        uncertainty_coefficient,
-        load_model_path=phase1_model_dir
-    )
+    if config_dict['run_phase2']:
+        blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
+        ABC17_filenames = glob.glob(os.path.join(dataset_dir, 'ABC17_train_mode0_*.npz'))
+        ABC2_filenames = glob.glob(os.path.join(dataset_dir, 'ABC2_train_mode0_*.npz'))
+        phase2_data_filenames = blob_filenames + ABC17_filenames + ABC2_filenames + ["datasets/tori_meshes.npz"]
+        phase2_config = TrainingConfig(
+            **config_dict['phase2_config']
+        )
+        print(f"Phase 2 config: {phase2_config}")
+        train_fundamental_form_predictor(
+            phase2_model_dir,
+            seed,
+            phase2_data_filenames,
+            model_config,
+            phase2_config,
+            lambda_coefficient,
+            uncertainty_coefficient,
+            load_model_path=phase1_model_dir
+        )
 
     # Phase 3: nicely sampled blobs and even more ABC meshes
     phase3_model_dir = f'{experiment_dir}/{experiment_name}_phase3'
-    blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
-    ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
-    phase3_data_filenames = blob_filenames + ABC_filenames + ["datasets/tori_meshes.npz"]
-    phase3_config = TrainingConfig(
-        **config_dict['phase3_config']
-    )
-    print(f"Phase 3 config: {phase3_config}")
-    train_fundamental_form_predictor(
-        phase3_model_dir,
-        seed,
-        phase3_data_filenames,
-        model_config,
-        phase3_config,
-        lambda_coefficient,
-        uncertainty_coefficient,
-        load_model_path=phase2_model_dir
-    )
+    if config_dict['run_phase3']:
+        blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
+        ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
+        phase3_data_filenames = blob_filenames + ABC_filenames + ["datasets/tori_meshes.npz"]
+        phase3_config = TrainingConfig(
+            **config_dict['phase3_config']
+        )
+        print(f"Phase 3 config: {phase3_config}")
+        train_fundamental_form_predictor(
+            phase3_model_dir,
+            seed,
+            phase3_data_filenames,
+            model_config,
+            phase3_config,
+            lambda_coefficient,
+            uncertainty_coefficient,
+            load_model_path=phase2_model_dir
+        )
 
     # Phase 4: everything from before, plus unevenly sampled data possibly with small gaps from a simulated scanning process
+    phase4_model_dir = f'{experiment_dir}/{experiment_name}_phase4'
     if config_dict['run_phase4']:
-        phase4_model_dir = f'{experiment_dir}/{experiment_name}_phase4'
         blob_filenames = glob.glob(os.path.join(dataset_dir, 'blobs_train_mode0*.npz'))
         ABC_filenames = glob.glob(os.path.join(dataset_dir, 'ABC*_train_mode0_*.npz'))
         blob_filenames_simulated = glob.glob(os.path.join('datasets/simulated', 'blobs_train_mode*.npz'))
